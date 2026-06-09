@@ -1,0 +1,25 @@
+node_modules
+dist
+.env
+.env.local
+.DS_Store
+*.log
+
+# Firebase & Service Account Files
+firebase.json
+firestore.rules
+firestore.indexes.json
+firebase-debug.log
+.runtimeconfig.json
+serviceAccountKey.json
+*-service-account.json
+.env.*
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+Thumbs.db
