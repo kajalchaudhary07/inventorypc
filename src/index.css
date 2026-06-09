@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; margin: 0; }
+
+/* Global Brand Color Overrides */
+:root {
+  --brand-primary: #16015b;
+  --brand-light-bg: #ebe8fb;
+  --brand-light-border: #cdc3fe;
+  --brand-muted: #9086b3;
+  --brand-dark-primary: #010040;
+  --brand-medium: #534585;
+  --brand-gray-bg: #e3e3e6;
+  --brand-darker: #1f095d;
+}
+
+/* Primary buttons, active sidebar links and badges */
+.bg-slate-900 {
+  background-color: var(--brand-primary) !important;
+}
+.hover\:bg-slate-800:hover {
+  background-color: var(--brand-darker) !important;
+}
+
+/* Sidebar hover and active styles */
+.hover\:bg-slate-100:hover {
+  background-color: var(--brand-light-bg) !important;
+}
+.hover\:bg-slate-50:hover {
+  background-color: var(--brand-light-bg) !important;
+}
+
+/* Text overrides */
+.text-indigo-600 {
+  color: var(--brand-primary) !important;
+}
+.text-indigo-700 {
+  color: var(--brand-primary) !important;
+}
+
+/* Badge and stat cards accent overrides */
+.bg-indigo-50 {
+  background-color: var(--brand-light-bg) !important;
+}
+.text-indigo-700 {
+  color: var(--brand-primary) !important;
+}
+.ring-indigo-200 {
+  --tw-ring-color: var(--brand-light-border) !important;
+}
+
+/* Tabs active borders */
+.border-slate-900 {
+  border-color: var(--brand-primary) !important;
+}
+.border-indigo-600 {
+  border-color: var(--brand-primary) !important;
+}

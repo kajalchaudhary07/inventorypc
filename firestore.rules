@@ -1,0 +1,52 @@
+rules_version = '2';
+
+// ========================================================================
+// UNIFIED SECURITY RULES FOR BOTH DASHBOARDS (Inventory + Ecommerce Admin)
+// 
+// Access Control:
+// - Admins & SuperAdmins: Full read/write access
+// - Others: No access
+//
+// Setup:
+// 1. Go to Firestore > Create collection "admins"
+// 2. Add document: Document ID = user's UID, fields: { role: "admin" }
+// 3. That's it! Works for both dashboards
+// ========================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null 
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // ===== INVENTORY COLLECTIONS (Salon Inventory Dashboard) =====
+    match /products/{id}        { allow read, write: if isAdmin(); }
+    match /itemGroups/{id}      { allow read, write: if isAdmin(); }
+    match /salons/{id}          { allow read, write: if isAdmin(); }
+    match /vendors/{id}         { allow read, write: if isAdmin(); }
+    match /stockMovements/{id}  { allow read, write: if isAdmin(); }
+    match /purchaseOrders/{id}  { allow read, write: if isAdmin(); }
+    match /salesOrders/{id}     { allow read, write: if isAdmin(); }
+    match /invoices/{id}        { allow read, write: if isAdmin(); }
+    match /reports/{id}         { allow read, write: if isAdmin(); }
+    match /activityLogs/{id}    { allow read, write: if isAdmin(); }
+
+    // ===== ECOMMERCE COLLECTIONS (Both apps share same DB) =====
+    match /users/{id}           { allow read, write: if isAdmin(); }
+    match /categories/{id}      { allow read, write: if isAdmin(); }
+    match /orders/{id}          { allow read, write: if isAdmin(); }
+    match /transactions/{id}    { allow read, write: if isAdmin(); }
+    match /coupons/{id}         { allow read, write: if isAdmin(); }
+
+    // ===== ADMIN MANAGEMENT =====
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;  // Manage admins from Firebase Console only
+    }
+
+    // Deny everything else
+    match /{document=**} { allow read, write: if false; }
+  }
+}
