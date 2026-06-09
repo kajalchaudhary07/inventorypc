@@ -35,6 +35,43 @@ const COLLECTIONS: CollectionName[] = [
   "activityLogs",
 ];
 
+// Normalize variant docs from subcollection or inline product.variants array (admin dashboard).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeVariantEntry(v: any, index: number): any {
+  if (!v || typeof v !== "object") return null;
+  const name =
+    v.name || v.shadeName || v.variantName || v.label ||
+    (v.attribute && v.value ? `${v.attribute}: ${v.value}` : v.value);
+  return {
+    ...v,
+    id: v.id || v.variantId || `variant_${index}`,
+    name,
+    sku: v.sku || v.variantSku || "",
+    costPrice: v.costPrice ?? v.cost ?? 0,
+    price: v.price ?? v.salePrice ?? v.sellingPrice ?? 0,
+    originalPrice: v.originalPrice ?? v.mrp ?? v.regularPrice ?? 0,
+    stock: v.stock ?? v.quantity ?? v.qty ?? 0,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeInlineVariants(raw: unknown): any[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((v, i) => normalizeVariantEntry(v, i))
+    .filter(Boolean);
+}
+
+// Prefer subcollection variants; fall back to inline array on the product document.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function resolveProductVariants(productData: any, subcollection: any[] = []): any[] {
+  const fromSub = subcollection.map((v, i) => normalizeVariantEntry(v, i)).filter(Boolean);
+  if (fromSub.length > 0) return fromSub;
+  return normalizeInlineVariants(
+    productData?.variants ?? productData?.productVariants ?? productData?.variantList
+  );
+}
+
 // Transform ecommerce product to inventory product
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function transformEcommerceProduct(ecomProduct: any): Product {
@@ -82,37 +119,41 @@ export function initData(): () => void {
   // Listen to admin products (app-facing products from admin dashboard)
   // Also fetch variants subcollection for each product
   const variantsMap: Record<string, any[]> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let rawAdminProducts: any[] = [];
 
-  const mergeVariants = () => {
-    const products = (useDataStore.getState() as any).adminProducts || [];
-    const merged = products.map((p: any) => ({
+  const publishAdminProducts = () => {
+    const merged = rawAdminProducts.map((p) => ({
       ...p,
-      variants: variantsMap[p.id] || [],
+      variants: resolveProductVariants(p, variantsMap[p.id]),
     }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (useDataStore.getState() as any).setCollection("adminProducts", merged);
   };
 
   unsubs.push(
     onSnapshot(collection(db!, "products"), (snap) => {
-      const adminProducts = snap.docs.map((d) => ({ id: d.id, ...d.data(), variants: variantsMap[d.id] || [] }));
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      useDataStore.getState().setCollection("adminProducts", adminProducts as any);
+      rawAdminProducts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      publishAdminProducts();
     })
   );
 
-  // Listen to all variants across all products
+  // All variant subcollections (admin dashboard stores variants here)
   unsubs.push(
-    onSnapshot(collectionGroup(db!, "variants"), (snap) => {
-      // Group variants by parent product id
-      Object.keys(variantsMap).forEach((k) => delete variantsMap[k]);
-      snap.docs.forEach((d) => {
-        const productId = d.ref.parent.parent?.id;
-        if (!productId) return;
-        if (!variantsMap[productId]) variantsMap[productId] = [];
-        variantsMap[productId].push({ id: d.id, ...d.data() });
-      });
-      mergeVariants();
-    })
+    onSnapshot(
+      collectionGroup(db!, "variants"),
+      (snap) => {
+        Object.keys(variantsMap).forEach((k) => delete variantsMap[k]);
+        snap.docs.forEach((d) => {
+          const productId = d.ref.parent.parent?.id;
+          if (!productId) return;
+          if (!variantsMap[productId]) variantsMap[productId] = [];
+          variantsMap[productId].push({ id: d.id, ...d.data() });
+        });
+        publishAdminProducts();
+      },
+      (err) => console.error("[variants] collectionGroup listener failed:", err)
+    )
   );
 
   // Listen to inventory-only products (manual products - never shown in Flutter app)
@@ -617,4 +658,47 @@ export async function updateInventoryProductField(
     p.id === productId ? { ...p, [field]: value } : p
   );
   state.setCollection("inventoryProducts", updated);
+}
+
+export async function updateVariantField(
+  productId: string,
+  variantId: string,
+  field: string,
+  value: number | string,
+) {
+  if (!isFirebaseConfigured || !db) return;
+
+  const payload: Record<string, unknown> =
+    field === "mrp"
+      ? { originalPrice: value, mrp: value }
+      : field === "costPrice"
+        ? { costPrice: value, cost: value }
+        : { [field]: value };
+
+  try {
+    await updateDoc(doc(db, "products", productId, "variants", variantId), payload);
+  } catch {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = useDataStore.getState() as any;
+    const product = (state.adminProducts || []).find((p: any) => p.id === productId);
+    if (!product) return;
+    const updatedVariants = (product.variants || []).map((v: any) =>
+      v.id === variantId ? { ...v, ...payload } : v
+    );
+    await updateDoc(doc(db, "products", productId), { variants: updatedVariants });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const state = useDataStore.getState() as any;
+  const updated = (state.adminProducts || []).map((p: any) =>
+    p.id === productId
+      ? {
+          ...p,
+          variants: (p.variants || []).map((v: any) =>
+            v.id === variantId ? { ...v, ...payload } : v
+          ),
+        }
+      : p
+  );
+  state.setCollection("adminProducts", updated);
 }
