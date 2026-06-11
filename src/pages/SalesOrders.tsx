@@ -37,6 +37,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
   const [askSave, setAskSave] = useState(false);
   const [search, setSearch] = useState("");
   const [quickAdd, setQuickAdd] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // Reset the working copy whenever a different order opens.
   useEffect(() => {
@@ -45,6 +46,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     setNote(order?.invoiceNote ?? "");
     setEditing(false);
     setAskSave(false);
+    setSaving(false);
     setSearch("");
     setQuickAdd(false);
   }, [order]);
@@ -103,11 +105,22 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
   };
 
   const applySave = async (updateMaster: boolean) => {
-    await updateOrderPricing(order, lines, updateMaster, { extraCharges: charges, invoiceNote: note });
-    toast.success(updateMaster ? "Invoice saved & product prices updated" : "Invoice saved");
-    setAskSave(false);
-    setEditing(false);
-    onClose();
+    if (saving) return;
+    setSaving(true);
+    try {
+      await updateOrderPricing(order, lines, updateMaster, { extraCharges: charges, invoiceNote: note });
+      toast.success(updateMaster ? "Invoice saved & product prices updated" : "Invoice saved");
+      setAskSave(false);
+      setEditing(false);
+      onClose();
+    } catch (err) {
+      console.error("applySave error:", err);
+      toast.error("Failed to save invoice changes. Please try again.");
+      // Close the confirmation sub-dialog so the user can retry via Save Changes
+      setAskSave(false);
+    } finally {
+      setSaving(false);
+    }
   };
 
   // Working order used for print / WhatsApp so unsaved edits are reflected.
@@ -327,9 +340,13 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         title="Save invoice changes"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setAskSave(false)}>Cancel</Button>
-            <Button variant="secondary" onClick={() => applySave(false)}>This invoice only</Button>
-            <Button onClick={() => applySave(true)}>Also update product prices</Button>
+            <Button variant="secondary" onClick={() => setAskSave(false)} disabled={saving}>Cancel</Button>
+            <Button variant="secondary" onClick={() => applySave(false)} disabled={saving}>
+              {saving ? "Saving…" : "This invoice only"}
+            </Button>
+            <Button onClick={() => applySave(true)} disabled={saving}>
+              {saving ? "Saving…" : "Also update product prices"}
+            </Button>
           </>
         }
       >
