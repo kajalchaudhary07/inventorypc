@@ -26,8 +26,10 @@ export default function Login() {
         useAuthStore.getState().setUser({ uid: cred.user.uid, email: cred.user.email ?? "" });
         logActivity("User Login", "session", "Logged in successfully", cred.user.uid);
       }
-    } catch (e: unknown) {
-      const code = (e as { code?: string }).code ?? "";
+    } catch (e: any) {
+      console.error("Firebase Sign-in error:", e);
+      const code = e.code ?? "";
+      const message = e.message ?? "Unknown error";
       const map: Record<string, string> = {
         "auth/invalid-credential": "Incorrect email or password.",
         "auth/invalid-email": "That email looks invalid.",
@@ -35,7 +37,7 @@ export default function Login() {
         "auth/wrong-password": "Incorrect password.",
         "auth/too-many-requests": "Too many attempts. Try again later.",
       };
-      setErr(map[code] || "Sign-in failed. Please try again.");
+      setErr(map[code] || `Sign-in failed: ${message} (${code})`);
     } finally {
       setBusy(false);
     }

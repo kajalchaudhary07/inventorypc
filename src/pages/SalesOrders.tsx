@@ -38,6 +38,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
   const [search, setSearch] = useState("");
   const [quickAdd, setQuickAdd] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [variantPickerProduct, setVariantPickerProduct] = useState<any | null>(null);
 
   // Reset the working copy whenever a different order opens.
   useEffect(() => {
@@ -49,6 +50,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     setSaving(false);
     setSearch("");
     setQuickAdd(false);
+    setVariantPickerProduct(null);
   }, [order]);
 
   if (!order) return null;
@@ -64,21 +66,37 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     setLines((prev) => prev.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const removeLineAt = (i: number) => setLines((prev) => prev.filter((_, j) => j !== i));
 
-  const addProductLine = (p: any) => {
+  const addProductLine = (p: any, v?: any) => {
+    const lineId = v ? `${p.id}__${v.id}` : p.id;
+    const name = v ? `${p.name} - ${v.shadeName || v.value || v.name}` : p.name;
+    const sku = v?.sku || p.sku || "";
+    const price = Number(v?.price ?? p.sellingPrice ?? p.price ?? 0);
+    const cost = Number(v?.costPrice ?? v?.cost ?? p.costPrice ?? 0);
+    const gstRate = Number(v?.gstRate ?? p.gstRate ?? 18);
+
     setLines((prev) => [
       ...prev,
       {
-        productId: p.id,
-        name: p.name,
-        sku: p.sku || "",
+        productId: lineId,
+        name,
+        sku,
         qty: 1,
-        price: Number(p.sellingPrice ?? p.price ?? 0),
-        cost: Number(p.costPrice ?? 0),
-        gstRate: Number(p.gstRate ?? 18),
+        price,
+        cost,
+        gstRate,
         discount: 0,
       },
     ]);
     setSearch("");
+    setVariantPickerProduct(null);
+  };
+
+  const handleProductClick = (p: any) => {
+    if (p.variants && p.variants.length > 0) {
+      setVariantPickerProduct(p);
+    } else {
+      addProductLine(p);
+    }
   };
 
   const matches = search
@@ -236,7 +254,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
               {matches.length > 0 && (
                 <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
                   {matches.map((p) => (
-                    <button key={p.id} onClick={() => addProductLine(p)} className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-700">
+                    <button key={p.id} onClick={() => handleProductClick(p)} className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-700">
                       <span className="font-medium text-slate-900 dark:text-white">{p.name}</span>
                       <span className="text-xs text-slate-400">{inr(p.sellingPrice)} · GST {p.gstRate}%</span>
                     </button>
@@ -355,6 +373,42 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
           Should changed <b>rate/cost</b> also update the product master prices (affecting future orders)?
         </p>
       </Modal>
+
+      {variantPickerProduct && (
+        <Modal
+          open={!!variantPickerProduct}
+          onClose={() => setVariantPickerProduct(null)}
+          title={`Select variant — ${variantPickerProduct.name}`}
+          footer={<Button variant="ghost" onClick={() => setVariantPickerProduct(null)}>Cancel</Button>}
+        >
+          <div className="p-4 space-y-2">
+            {variantPickerProduct.variants.map((v: any) => (
+              <button
+                key={v.id}
+                onClick={() => addProductLine(variantPickerProduct, v)}
+                className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-left hover:bg-slate-50 hover:border-slate-400 transition"
+              >
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-white">
+                    {v.value || v.shadeName || v.name || v.attribute || v.id}
+                  </p>
+                  {v.sku && <p className="text-xs text-slate-400 font-mono">{v.sku}</p>}
+                </div>
+                <div className="text-right">
+                  <p className="font-semibold text-slate-900 dark:text-white">
+                    {inr(v.price ?? variantPickerProduct.sellingPrice ?? variantPickerProduct.price ?? 0)}
+                  </p>
+                  {v.stock != null && (
+                    <p className={`text-xs ${v.stock > 0 ? "text-green-600 font-medium" : "text-red-500 font-medium"}`}>
+                      {v.stock} left
+                    </p>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
     </Modal>
   );
 }
@@ -547,8 +601,13 @@ export default function SalesOrders() {
   }, [dateFilteredOrders]);
 
   const changeStatus = async (o: SalesOrder, status: SalesStatus) => {
-    await setOrderStatus(o, status);
-    toast.success(`${o.orderNo} → ${status}`);
+    try {
+      await setOrderStatus(o, status);
+      toast.success(`${o.orderNo} → ${status}`);
+    } catch (err: any) {
+      console.error("Error updating status:", err);
+      toast.error(`Error updating status: ${err.message || err}`);
+    }
   };
 
   return (

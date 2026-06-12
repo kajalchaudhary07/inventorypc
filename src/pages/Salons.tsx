@@ -45,6 +45,8 @@ type FormValues = z.infer<typeof schema>;
 function SalonForm({ open, onClose, editing }: { open: boolean; onClose: () => void; editing: Salon | null }) {
   const initialStatus = useMemo(() => {
     if (!editing) return "Active";
+    // Read from Firestore doc field first, then localStorage fallback
+    if (editing.status) return editing.status;
     const localStatusesStr = localStorage.getItem("pc_salon_statuses");
     const localStatuses = localStatusesStr ? JSON.parse(localStatusesStr) : {};
     return localStatuses[editing.id] || "Active";
@@ -83,12 +85,6 @@ function SalonForm({ open, onClose, editing }: { open: boolean; onClose: () => v
     const id = editing?.id ?? uid();
     const status = v.status || "Active";
 
-    // Save status to localStorage
-    const localStatusesStr = localStorage.getItem("pc_salon_statuses");
-    const localStatuses = localStatusesStr ? JSON.parse(localStatusesStr) : {};
-    localStatuses[id] = status;
-    localStorage.setItem("pc_salon_statuses", JSON.stringify(localStatuses));
-
     const salon: Salon = {
       id,
       outstanding: editing?.outstanding ?? 0,
@@ -103,6 +99,7 @@ function SalonForm({ open, onClose, editing }: { open: boolean; onClose: () => v
       region: v.region,
       branchNo: v.branchNo,
       description: v.description,
+      status,
     };
     await saveDoc("salons", salon);
     logActivity(editing ? "Edited salon" : "Added salon", "salon", salon.name);
@@ -149,15 +146,18 @@ export default function Salons() {
   const [filter, setFilter] = useState("all");
   const [localVersion, setLocalVersion] = useState(0);
 
-  const getSalonStatus = (salonId: string) => {
+  const getSalonStatus = (salon: Salon) => {
+    // Priority 1: Firestore doc field
+    if (salon.status) return salon.status;
+    // Priority 2: localStorage fallback
     const localStatusesStr = typeof window !== "undefined" ? localStorage.getItem("pc_salon_statuses") : null;
     const localStatuses = localStatusesStr ? JSON.parse(localStatusesStr) : {};
-    return localStatuses[salonId] || "Active";
+    return localStatuses[salon.id] || "Active";
   };
 
   const enriched = useMemo(() => salons.map((s) => {
     const orders = salesOrders.filter((o) => o.salonId === s.id && o.status !== "Cancelled");
-    const status = getSalonStatus(s.id);
+    const status = getSalonStatus(s);
 
     // Outstanding Balance = Total Bill Amount of all orders for this salon minus Total Amount Paid across all orders for this salon
     const totalBill = orders.reduce((a, o) => a + o.total, 0);

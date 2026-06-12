@@ -5,7 +5,7 @@ import { Button, Card, Field, Input, Select, PageHeader, StatCard, Badge } from 
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
-import { saveDoc, receivePurchase, logActivity } from "@/services/data";
+import { saveDoc, receivePurchase, logActivity, savePOPayment } from "@/services/data";
 import { inr, num, fmtDate, uid } from "@/lib/utils";
 import type { PurchaseLine, PurchaseOrder } from "@/types";
 import { getMergedProducts } from "@/services/productOverrides";
@@ -45,20 +45,39 @@ function CreatePO({ open, onClose }: { open: boolean; onClose: () => void }) {
   const submit = async () => {
     const vendor = vendors.find((v) => v.id === vendorId);
     if (!vendor || !lines.length) { toast.error("Pick a vendor and at least one product"); return; }
+    
+    // Clean lines to prevent undefined or NaN values from crashing Firestore
+    const cleanedLines = lines.map(l => ({
+      productId: l.productId,
+      name: l.name,
+      sku: l.sku || "",
+      qty: Number(l.qty) || 0,
+      received: Number(l.received) || 0,
+      cost: Number(l.cost) || 0
+    }));
+
+    const finalTotal = cleanedLines.reduce((s, l) => s + l.qty * l.cost, 0);
+
     const po: PurchaseOrder = {
       id: uid(),
       poNo: "PO-" + Math.floor(2000 + Math.random() * 8000),
       vendorId: vendor.id,
       vendorName: vendor.name,
-      lines,
-      total,
+      lines: cleanedLines,
+      total: finalTotal,
       status: "Sent",
       createdAt: Date.now(),
     };
-    await saveDoc("purchaseOrders", po);
-    logActivity("Created PO", "purchaseOrder", `${po.poNo} · ${vendor.name} · ${inr(total)}`, po.poNo);
-    toast.success("Purchase order created");
-    setVendorId(""); setLines([]); onClose();
+
+    try {
+      await saveDoc("purchaseOrders", po);
+      logActivity("Created PO", "purchaseOrder", `${po.poNo} · ${vendor.name} · ${inr(finalTotal)}`, po.poNo);
+      toast.success("Purchase order created");
+      setVendorId(""); setLines([]); onClose();
+    } catch (err: any) {
+      console.error("Failed to create PO:", err);
+      toast.error(`Failed to create PO: ${err.message || err}`);
+    }
   };
 
   const matchingVendors = useMemo(() => {
@@ -201,10 +220,15 @@ function PODetailModal({ po, onClose, onSave }: { po: PurchaseOrder | null; onCl
   
   useEffect(() => {
     if (po) {
-      const localPaymentsStr = localStorage.getItem("pc_po_payments");
-      const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
-      const amt = localPayments[po.id] !== undefined ? Number(localPayments[po.id]) : 0;
-      setAmountPaid(String(amt));
+      // Read from Firestore-persisted field first, then localStorage fallback
+      if (po.amountPaid !== undefined && po.amountPaid !== null) {
+        setAmountPaid(String(po.amountPaid));
+      } else {
+        const localPaymentsStr = localStorage.getItem("pc_po_payments");
+        const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
+        const amt = localPayments[po.id] !== undefined ? Number(localPayments[po.id]) : 0;
+        setAmountPaid(String(amt));
+      }
     }
   }, [po]);
 
@@ -212,20 +236,21 @@ function PODetailModal({ po, onClose, onSave }: { po: PurchaseOrder | null; onCl
 
   const total = Number(po.total ?? 0);
 
-  const savePayment = () => {
+  const savePayment = async () => {
     const amt = Number(amountPaid);
     if (isNaN(amt) || amt < 0) {
       toast.error("Please enter a valid amount");
       return;
     }
-    const localPaymentsStr = localStorage.getItem("pc_po_payments");
-    const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
-    localPayments[po.id] = amt;
-    localStorage.setItem("pc_po_payments", JSON.stringify(localPayments));
-    
-    toast.success("PO payment updated successfully");
-    onSave();
-    onClose();
+    try {
+      await savePOPayment(po.id, amt);
+      toast.success("PO payment updated successfully");
+      onSave();
+      onClose();
+    } catch (err) {
+      console.error("Error saving PO payment:", err);
+      toast.error("Failed to save payment");
+    }
   };
 
   return (
@@ -297,11 +322,19 @@ export default function PurchaseOrders() {
 
   const getPoPaymentInfo = useMemo(() => {
     return (po: PurchaseOrder) => {
-      const localPaymentsStr = typeof window !== "undefined" ? localStorage.getItem("pc_po_payments") : null;
-      const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
-      
       const total = Number(po.total ?? 0);
-      const amountPaid = localPayments[po.id] !== undefined ? Number(localPayments[po.id]) : 0;
+      let amountPaid = 0;
+
+      // Priority 1: Firestore-persisted amountPaid field
+      if (po.amountPaid !== undefined && po.amountPaid !== null) {
+        amountPaid = Number(po.amountPaid);
+      } else {
+        // Priority 2: localStorage fallback
+        const localPaymentsStr = typeof window !== "undefined" ? localStorage.getItem("pc_po_payments") : null;
+        const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
+        amountPaid = localPayments[po.id] !== undefined ? Number(localPayments[po.id]) : 0;
+      }
+      
       const balance = Math.max(0, total - amountPaid);
       
       let statusText = "Unpaid";
