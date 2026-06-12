@@ -87,10 +87,12 @@ export default function ManualOrderEntry() {
     });
 
     adminCustomers.forEach((c: any) => {
+      const salonName = c.salonName || c.salon || c.name || c.displayName || "Unknown Customer";
+      const ownerName = (c.salonName || c.salon) ? (c.name || c.displayName || "") : "";
       list.push({
         id: c.id,
-        name: c.name || c.displayName || "Unknown Customer",
-        ownerName: "",
+        name: salonName,
+        ownerName: ownerName,
         phone: c.phone || c.phoneNumber || "",
         email: c.email || "",
         gstin: "",
@@ -627,6 +629,7 @@ export default function ManualOrderEntry() {
                             .map((c) => {
                               const isSelected = c.id === salonId;
                               const matchDetails = [
+                                c.ownerName && `Owner: ${c.ownerName}`,
                                 c.phone && `Phone: ${c.phone}`,
                                 c.email && `Email: ${c.email}`,
                               ].filter(Boolean).join(" | ");

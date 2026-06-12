@@ -23,6 +23,8 @@ service cloud.firestore {
 
     // ===== INVENTORY COLLECTIONS (Salon Inventory Dashboard) =====
     match /products/{id}        { allow read, write: if isAdmin(); }
+    match /{path=**}/variants/{id} { allow read, write: if isAdmin(); }
+    match /inventoryProducts/{id} { allow read, write: if isAdmin(); }
     match /itemGroups/{id}      { allow read, write: if isAdmin(); }
     match /salons/{id}          { allow read, write: if isAdmin(); }
     match /vendors/{id}         { allow read, write: if isAdmin(); }

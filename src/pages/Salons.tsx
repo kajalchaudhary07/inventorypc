@@ -24,7 +24,16 @@ const getField = (obj: any, keys: string[]) => {
   return "";
 };
 
-const extractName = (obj: any) => getField(obj, ["name", "customerName", "ownerName", "displayName", "salonName"]);
+const extractName = (obj: any) => getField(obj, ["salonName", "salon", "name", "customerName", "displayName"]);
+const extractSalonName = extractName;
+const extractOwnerName = (obj: any) => {
+  const salonName = getField(obj, ["salonName", "salon"]);
+  const ownerName = getField(obj, ["ownerName", "name", "displayName"]);
+  if (salonName === "" && ownerName !== "") {
+    return "";
+  }
+  return ownerName;
+};
 const extractPhone = (obj: any) => getField(obj, ["phone", "mobile", "phoneNumber", "customerPhone", "ownerPhone"]);
 const extractEmail = (obj: any) => getField(obj, ["email", "customerEmail", "ownerEmail", "salonEmail", "userEmail"]);
 
@@ -257,10 +266,11 @@ export default function Salons() {
     const q = customerSearch.trim().toLowerCase();
     if (!q) return adminCustomers;
     return adminCustomers.filter((c: any) => {
-      const cName = extractName(c).toLowerCase();
+      const cSalonName = extractSalonName(c).toLowerCase();
+      const cOwnerName = extractOwnerName(c).toLowerCase();
       const cPhone = extractPhone(c).toLowerCase();
       const cEmail = extractEmail(c).toLowerCase();
-      return cName.includes(q) || cPhone.includes(q) || cEmail.includes(q);
+      return cSalonName.includes(q) || cOwnerName.includes(q) || cPhone.includes(q) || cEmail.includes(q);
     });
   }, [adminCustomers, customerSearch]);
 
@@ -342,16 +352,17 @@ export default function Salons() {
                 <tr><td colSpan={4} className="py-10 text-center text-slate-400">No customers found.</td></tr>
               ) : (
                 filteredCustomers.map((c: any) => {
-                  const name = extractName(c) || "-";
+                  const salonName = extractSalonName(c) || "-";
+                  const ownerName = extractOwnerName(c);
                   const email = extractEmail(c) || "-";
                   const phone = extractPhone(c) || "-";
                   return (
                     <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                       <td className="px-4 py-3">
                         <div>
-                          <div className="font-medium text-slate-900 dark:text-white">{name}</div>
+                          <div className="font-medium text-slate-900 dark:text-white">{salonName}</div>
                           <div className="text-xs text-slate-400">
-                            {email} · {phone}
+                            {ownerName ? `${ownerName} · ` : ""}{email} · {phone}
                           </div>
                         </div>
                       </td>
@@ -369,7 +380,7 @@ export default function Salons() {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <button
-                          onClick={() => handleDeleteCustomer(c.id, name !== "-" ? name : (email !== "-" ? email : "this customer"))}
+                          onClick={() => handleDeleteCustomer(c.id, salonName !== "-" ? salonName : (email !== "-" ? email : "this customer"))}
                           className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950 dark:hover:text-rose-400"
                         >
                           <Trash2 className="h-4 w-4" />

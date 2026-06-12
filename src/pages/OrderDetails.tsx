@@ -191,7 +191,7 @@ export default function OrderDetails() {
 
       if (isPcOrder) {
         name = salonName && salonName !== "-" && salonName !== customerName
-          ? `${customerName} (${salonName})`
+          ? `${salonName} (${customerName})`
           : customerName;
       } else {
         name = customerName;
