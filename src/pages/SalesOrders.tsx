@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import toast from "react-hot-toast";
 import { Plus, FileText, Printer, Pencil, Save, X, MessageCircle, Trash2, Search, PackagePlus, Bell, Copy, Truck, Eye } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -50,6 +50,8 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     placeOfSupply: false,
   });
 
+  const prevOrderIdRef = useRef<string | null>(null);
+
   // Reset the working copy whenever a different order opens.
   useEffect(() => {
     if (!order) {
@@ -71,45 +73,50 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         source: false,
         placeOfSupply: false,
       });
+      prevOrderIdRef.current = null;
       return;
     }
 
-    setLines(order.lines.map((l) => {
-      let mrp = (l as any).mrp;
-      if (mrp === undefined || mrp === 0) {
-        const [pId, vId] = l.productId.split("__");
-        const prod = allProducts.find((p) => p.id === pId);
-        if (prod) {
-          if (vId && prod.variants) {
-            const variant = prod.variants.find((v: any) => v.id === vId);
-            mrp = variant ? (variant.originalPrice ?? variant.mrp) : (prod.originalPrice ?? prod.mrp);
-          } else {
-            mrp = prod.originalPrice ?? prod.mrp;
+    if (prevOrderIdRef.current !== order.id) {
+      prevOrderIdRef.current = order.id;
+
+      setLines(order.lines.map((l) => {
+        let mrp = (l as any).mrp;
+        if (mrp === undefined || mrp === 0) {
+          const [pId, vId] = l.productId.split("__");
+          const prod = allProducts.find((p) => p.id === pId);
+          if (prod) {
+            if (vId && prod.variants) {
+              const variant = prod.variants.find((v: any) => v.id === vId);
+              mrp = variant ? (variant.originalPrice ?? variant.mrp) : (prod.originalPrice ?? prod.mrp);
+            } else {
+              mrp = prod.originalPrice ?? prod.mrp;
+            }
           }
         }
-      }
-      return {
-        ...l,
-        mrp: Number(mrp ?? l.price)
-      };
-    }));
-    setCharges(order.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : []);
-    setNote(order.invoiceNote ?? "");
-    setEditing(false);
-    setAskSave(false);
-    setSaving(false);
-    setSearch("");
-    setQuickAdd(false);
-    setVariantPickerProduct(null);
-    setDetailFields({
-      amountPaid: false,
-      amountToBePaid: false,
-      paymentStatus: false,
-      totalGst: false,
-      gstColumn: false,
-      source: false,
-      placeOfSupply: false,
-    });
+        return {
+          ...l,
+          mrp: Number(mrp ?? l.price)
+        };
+      }));
+      setCharges(order.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : []);
+      setNote(order.invoiceNote ?? "");
+      setEditing(false);
+      setAskSave(false);
+      setSaving(false);
+      setSearch("");
+      setQuickAdd(false);
+      setVariantPickerProduct(null);
+      setDetailFields({
+        amountPaid: false,
+        amountToBePaid: false,
+        paymentStatus: false,
+        totalGst: false,
+        gstColumn: false,
+        source: false,
+        placeOfSupply: false,
+      });
+    }
   }, [order, allProducts]);
 
   if (!order) return null;
@@ -122,7 +129,20 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
 
   // Edit by index (lines can repeat a productId or be newly added).
   const setLineAt = (i: number, patch: Partial<OrderLine>) =>
-    setLines((prev) => prev.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+    setLines((prev) =>
+      prev.map((l, j) => {
+        if (j === i) {
+          const next = { ...l, ...patch };
+          if (patch.qty !== undefined) next.qty = isNaN(Number(patch.qty)) ? 0 : Number(patch.qty);
+          if (patch.price !== undefined) next.price = isNaN(Number(patch.price)) ? 0 : Number(patch.price);
+          if (patch.cost !== undefined) next.cost = isNaN(Number(patch.cost)) ? 0 : Number(patch.cost);
+          if (patch.discount !== undefined) next.discount = isNaN(Number(patch.discount)) ? 0 : Number(patch.discount);
+          if (patch.gstRate !== undefined) next.gstRate = isNaN(Number(patch.gstRate)) ? 0 : Number(patch.gstRate);
+          return next;
+        }
+        return l;
+      })
+    );
   const removeLineAt = (i: number) => setLines((prev) => prev.filter((_, j) => j !== i));
 
   const addProductLine = (p: any, v?: any) => {

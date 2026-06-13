@@ -26,17 +26,24 @@ export const isOut = (p: Product) => getProductStock(p) === 0;
 
 // ---- Order line / order totals (GST-inclusive style, India) -------------
 export function lineNet(l: OrderLine) {
-  return l.price * l.qty - l.discount;
+  const price = Number(l.price) || 0;
+  const qty = Number(l.qty) || 0;
+  const discount = Number(l.discount) || 0;
+  return price * qty - discount;
 }
 export function lineGst(l: OrderLine) {
-  return (lineNet(l) * l.gstRate) / 100;
+  const gstRate = Number(l.gstRate) || 0;
+  return (lineNet(l) * gstRate) / 100;
 }
 export function lineProfit(l: OrderLine) {
-  return (l.price - l.cost) * l.qty;
+  const price = Number(l.price) || 0;
+  const cost = Number(l.cost) || 0;
+  const qty = Number(l.qty) || 0;
+  return (price - cost) * qty;
 }
 export function orderTotals(lines: OrderLine[], extraCharges: { amount: number }[] = []) {
-  const subtotal = lines.reduce((s, l) => s + l.price * l.qty, 0);
-  const discountTotal = lines.reduce((s, l) => s + l.discount, 0);
+  const subtotal = lines.reduce((s, l) => s + (Number(l.price) || 0) * (Number(l.qty) || 0), 0);
+  const discountTotal = lines.reduce((s, l) => s + (Number(l.discount) || 0), 0);
   const gstTotal = lines.reduce((s, l) => s + lineGst(l), 0);
   const profit = lines.reduce((s, l) => s + lineProfit(l), 0);
   const extraChargesTotal = extraCharges.reduce((s, c) => s + (Number(c.amount) || 0), 0);

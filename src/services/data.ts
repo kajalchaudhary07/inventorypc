@@ -536,9 +536,30 @@ export async function updateOrderPricing(
 ) {
   const extraCharges = extras?.extraCharges ?? order.extraCharges ?? [];
   const totals = orderTotals(lines, extraCharges);
+  
+  const items = lines.map((l) => ({
+    productId: l.productId,
+    id: l.productId,
+    name: l.name,
+    title: l.name,
+    productName: l.name,
+    sku: l.sku,
+    qty: l.qty,
+    quantity: l.qty,
+    price: l.price,
+    unitPrice: l.price,
+    cost: l.cost,
+    costPrice: l.cost,
+    gstRate: l.gstRate,
+    gstPercent: l.gstRate,
+    gst: l.gstRate,
+    discount: l.discount,
+  }));
+
   const updatedOrder = {
     ...order,
     lines,
+    items,
     ...totals,
     extraCharges,
     invoiceNote: extras?.invoiceNote ?? order.invoiceNote ?? "",
@@ -555,6 +576,7 @@ export async function updateOrderPricing(
       try {
         await updateDoc(doc(db, "orders", order.id), {
           lines,
+          items,
           total: totals.total,
           subtotal: totals.subtotal,
           gstTotal: totals.gstTotal,
@@ -571,10 +593,59 @@ export async function updateOrderPricing(
 
   if (updateMaster) {
     for (const l of lines) {
-      const p = useDataStore.getState().products.find((x) => x.id === l.productId);
-      if (!p) continue;
-      if (p.sellingPrice !== l.price || p.costPrice !== l.cost) {
-        await saveDoc<Product>("products", { ...p, sellingPrice: l.price, costPrice: l.cost, updatedAt: Date.now() });
+      const [pId, vId] = l.productId.split("__");
+      
+      if (vId) {
+        // Variant product: update variant's price and cost
+        // Let's find the product in adminProducts
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const adminProd = ((useDataStore.getState() as any).adminProducts || []).find((x: any) => x.id === pId);
+        if (adminProd) {
+          const variant = (adminProd.variants || []).find((v: any) => v.id === vId);
+          if (variant) {
+            const variantPrice = variant.price ?? variant.sellingPrice ?? 0;
+            const variantCost = variant.costPrice ?? variant.cost ?? 0;
+            if (Number(variantPrice) !== l.price) {
+              await updateVariantField(pId, vId, "price", l.price);
+            }
+            if (Number(variantCost) !== l.cost) {
+              await updateVariantField(pId, vId, "costPrice", l.cost);
+            }
+          }
+          continue;
+        }
+
+        // Let's find the product in inventoryProducts
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const invProd = ((useDataStore.getState() as any).inventoryProducts || []).find((x: any) => x.id === pId);
+        if (invProd) {
+          const variants = invProd.variants || [];
+          const updatedVariants = variants.map((v: any) => {
+            if (v.id === vId) {
+              return { ...v, price: l.price, costPrice: l.cost, cost: l.cost, sellingPrice: l.price };
+            }
+            return v;
+          });
+          await saveInventoryProduct({ ...invProd, variants: updatedVariants, updatedAt: Date.now() });
+        }
+      } else {
+        // Simple product: update simple product's price and cost
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const adminProd = ((useDataStore.getState() as any).adminProducts || []).find((x: any) => x.id === pId);
+        if (adminProd) {
+          if (Number(adminProd.sellingPrice ?? 0) !== l.price || Number(adminProd.costPrice ?? 0) !== l.cost) {
+            await saveDoc("products", { ...adminProd, sellingPrice: l.price, costPrice: l.cost, updatedAt: Date.now() });
+          }
+          continue;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const invProd = ((useDataStore.getState() as any).inventoryProducts || []).find((x: any) => x.id === pId);
+        if (invProd) {
+          if (Number(invProd.sellingPrice ?? 0) !== l.price || Number(invProd.costPrice ?? 0) !== l.cost) {
+            await saveInventoryProduct({ ...invProd, sellingPrice: l.price, costPrice: l.cost, updatedAt: Date.now() });
+          }
+        }
       }
     }
   }
