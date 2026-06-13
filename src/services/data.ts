@@ -451,21 +451,46 @@ export async function adjustStock(
   product: Product,
   type: MovementType,
   signedQty: number,
-  reason: string
+  reason: string,
+  variantId?: string
 ) {
-  const newStock = product.stock + signedQty;
-  await saveDoc<Product>("products", { ...product, stock: newStock, updatedAt: Date.now() });
-  await saveDoc<StockMovement>("stockMovements", {
-    id: uid(),
-    productId: product.id,
-    productName: product.name,
-    type,
-    qty: signedQty,
-    reason,
-    balanceAfter: newStock,
-    createdAt: Date.now(),
-  });
-  logActivity("Stock adjustment", "product", `${product.sku}: ${signedQty > 0 ? "+" : ""}${signedQty} (${reason})`, product.sku);
+  if (variantId) {
+    const variants = (product as any).variants || [];
+    const variant = variants.find((v: any) => v.id === variantId);
+    if (variant) {
+      const newStock = (variant.stock ?? 0) + signedQty;
+      await updateVariantField(product.id, variantId, "stock", newStock);
+      await saveDoc<StockMovement>("stockMovements", {
+        id: uid(),
+        productId: `${product.id}__${variantId}`,
+        productName: `${product.name} - ${variant.name || variant.shadeName || variant.value || variantId}`,
+        type,
+        qty: signedQty,
+        reason,
+        balanceAfter: newStock,
+        createdAt: Date.now(),
+      });
+      logActivity("Stock adjustment", "variant", `${product.sku} (${variant.sku || variantId}): ${signedQty > 0 ? "+" : ""}${signedQty} (${reason})`, product.sku);
+    }
+  } else {
+    const newStock = (product.stock ?? 0) + signedQty;
+    if ((product as any).isInventoryOnly || (product as any).source === "manual") {
+      await saveInventoryProduct({ ...product, stock: newStock, updatedAt: Date.now() });
+    } else {
+      await saveDoc<Product>("products", { ...product, stock: newStock, updatedAt: Date.now() });
+    }
+    await saveDoc<StockMovement>("stockMovements", {
+      id: uid(),
+      productId: product.id,
+      productName: product.name,
+      type,
+      qty: signedQty,
+      reason,
+      balanceAfter: newStock,
+      createdAt: Date.now(),
+    });
+    logActivity("Stock adjustment", "product", `${product.sku}: ${signedQty > 0 ? "+" : ""}${signedQty} (${reason})`, product.sku);
+  }
 }
 
 // Receive (fully or partially) lines of a purchase order; adds stock + movements.

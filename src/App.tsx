@@ -29,6 +29,7 @@ const Analytics = lazy(() => import("@/pages/Analytics"));
 const BusinessIntelligence = lazy(() => import("@/pages/BusinessIntelligence"));
 const ActivityLogs = lazy(() => import("@/pages/ActivityLogs"));
 const Settings = lazy(() => import("@/pages/Settings"));
+const RecycleBin = lazy(() => import("@/pages/RecycleBin"));
 
 function PageSkeleton() {
   return (
@@ -133,6 +134,7 @@ export default function App() {
               <Route path="business-intelligence" element={<BusinessIntelligence />} />
               <Route path="activity" element={<ActivityLogs />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="bin" element={<RecycleBin />} />
             </Route>
           </Routes>
         </Suspense>

@@ -96,14 +96,14 @@ export default function DashboardHome() {
   }, [invSalesOrders, adminOrders]);
 
   const m = useMemo(() => {
-    const active = products.filter((p) => p.status === "active");
+    const active = products.filter((p) => p.status !== "archived");
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
     const todayStart = new Date().setHours(0, 0, 0, 0);
     const valid = salesOrders.filter((o) => o.status !== "Cancelled");
     return {
       totalProducts: active.length,
       invValue: active.reduce((s, p) => s + invValue(p), 0),
-      low: active.filter((p) => isLow(p) && available(p) > 0).length,
+      low: active.filter((p) => isLow(p)).length,
       out: active.filter((p) => isOut(p)).length,
       todaySales: valid.filter((o) => o.createdAt >= todayStart).reduce((s, o) => s + o.total, 0),
       monthRevenue: valid.filter((o) => o.createdAt >= monthStart).reduce((s, o) => s + o.total, 0),
@@ -125,7 +125,7 @@ export default function DashboardHome() {
     limit: 6,
   });
   const movement = movementByDay(stockMovements, 7);
-  const lowItems = products.filter((p) => isLow(p)).slice(0, 6);
+  const lowItems = products.filter((p) => p.status !== "archived" && isLow(p)).slice(0, 6);
   const recentOrders = [...salesOrders].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   const recentMoves = [...stockMovements].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   const recentPO = [...purchaseOrders].sort((a, b) => b.createdAt - a.createdAt).slice(0, 4);

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Menu, Moon, Sun, Search, LogOut, AlertTriangle, XCircle } from "lucide-react";
 import { useUIStore } from "@/store/uiStore";
@@ -12,15 +13,22 @@ export function Topbar() {
   const navigate = useNavigate();
   const { toggleSidebar, toggleTheme, theme } = useUIStore();
   const user = useAuthStore((s) => s.user);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { products: invProducts } = useDataStore();
   const adminProducts = useDataStore((s) => (s as any).adminProducts || []);
-  const mergedProducts = getMergedProducts(adminProducts);
-  const active = mergedProducts.filter((p: any) => p.status !== "archived");
-  const lowCount = active.filter((p: any) => {
-    const stock = p.stock ?? 0;
-    return stock > 0 && stock <= (p.reorderTriggerValue || p.reorderLevel || 5);
-  }).length;
-  const outCount = active.filter((p: any) => (p.stock ?? 0) === 0).length;
+  const inventoryProducts = useDataStore((s) => (s as any).inventoryProducts || []);
+
+  const products = useMemo(() => {
+    const map = new Map<string, any>();
+    (invProducts || []).forEach((p: any) => map.set(p.id, p));
+    const mergedAdmin = getMergedProducts(adminProducts);
+    mergedAdmin.forEach((p: any) => map.set(p.id, p));
+    (inventoryProducts || []).forEach((p: any) => map.set(p.id, p));
+    return Array.from(map.values());
+  }, [invProducts, adminProducts, inventoryProducts]);
+
+  const active = products.filter((p: any) => p.status !== "archived");
+  const lowCount = active.filter((p: any) => isLow(p)).length;
+  const outCount = active.filter((p: any) => isOut(p)).length;
 
   const handleSignOut = async () => {
     if (isFirebaseConfigured && auth) await signOut(auth);

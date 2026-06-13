@@ -9,7 +9,7 @@ import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
 import { adjustStock } from "@/services/data";
 import { inr, num, fmtDateTime, exportCsv } from "@/lib/utils";
-import { invValue } from "@/lib/calc";
+import { invValue, getProductStock } from "@/lib/calc";
 import type { MovementType, Product, StockMovement } from "@/types";
 import { getMergedProducts } from "@/services/productOverrides";
 
@@ -21,7 +21,7 @@ const TYPES: { value: MovementType; label: string; sign: number }[] = [
   { value: "expired", label: "Expired", sign: -1 },
 ];
 
-function AdjustModal({ open, onClose, product }: { open: boolean; onClose: () => void; product: Product | null }) {
+function AdjustModal({ open, onClose, product, variantId }: { open: boolean; onClose: () => void; product: Product | null; variantId?: string }) {
   const [type, setType] = useState<MovementType>("adjustment");
   const [qty, setQty] = useState(1);
   const [reason, setReason] = useState("");
@@ -30,9 +30,13 @@ function AdjustModal({ open, onClose, product }: { open: boolean; onClose: () =>
   const conf = TYPES.find((t) => t.value === type)!;
   const signed = conf.sign * Math.abs(qty);
 
+  const variant = variantId ? (product as any).variants?.find((v: any) => v.id === variantId) : null;
+  const currentStock = variant ? (variant.stock ?? 0) : (product?.stock ?? 0);
+  const name = variant ? `${product?.name} - ${variant.name || variant.shadeName || variant.value || variantId}` : product?.name;
+
   const submit = async () => {
     if (!qty) { toast.error("Enter a quantity"); return; }
-    await adjustStock(product, type, signed, reason || conf.label);
+    await adjustStock(product, type, signed, reason || conf.label, variantId);
     toast.success("Stock updated");
     setQty(1); setReason("");
     onClose();
@@ -40,12 +44,12 @@ function AdjustModal({ open, onClose, product }: { open: boolean; onClose: () =>
 
   return (
     <Modal
-      open={open} onClose={onClose} title={`Adjust stock — ${product.name}`}
+      open={open} onClose={onClose} title={`Adjust stock — ${name}`}
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={submit}>Apply</Button></>}
     >
       <div className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-        Current stock: <b>{num(product.stock)}</b> {product.unit} · New balance:{" "}
-        <b className={signed < 0 ? "text-rose-600" : "text-emerald-600"}>{num(product.stock + signed)}</b>
+        Current stock: <b>{num(currentStock)}</b> {product.unit} · New balance:{" "}
+        <b className={signed < 0 ? "text-rose-600" : "text-emerald-600"}>{num(currentStock + signed)}</b>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <Field label="Movement type">
@@ -70,6 +74,7 @@ export default function StockManagement() {
     return [...mergedAdminProducts, ...inventoryProducts];
   }, [mergedAdminProducts, inventoryProducts]);
   const [selected, setSelected] = useState<Product | null>(null);
+  const [selectedVariantId, setSelectedVariantId] = useState<string | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const [typeFilter, setTypeFilter] = useState("all");
   const [productFilter, setProductFilter] = useState("all");
@@ -77,14 +82,34 @@ export default function StockManagement() {
   const totals = useMemo(() => {
     const stockIn = stockMovements.filter((m) => m.qty > 0).reduce((s, m) => s + m.qty, 0);
     const stockOut = stockMovements.filter((m) => m.qty < 0).reduce((s, m) => s + Math.abs(m.qty), 0);
-    const valuation = products.reduce((acc, product) => {
-      const stockQty = Number(product.stock || 0);
-      const costPrice = Number(product.costPrice ?? product.cost ?? product.sellingPrice ?? product.price ?? product.sp ?? 0);
-      return acc + (stockQty * costPrice);
-    }, 0);
-    const currentUnits = products.reduce((s, p) => s + p.stock, 0);
+    const valuation = products.reduce((acc, product) => acc + invValue(product), 0);
+    const currentUnits = products.reduce((s, p) => s + getProductStock(p), 0);
     return { stockIn, stockOut, valuation, currentUnits };
   }, [products, stockMovements]);
+
+  const flatProducts = useMemo(() => {
+    const list: any[] = [];
+    products.filter((p) => p.status === "active").forEach((p) => {
+      if (p.variants && p.variants.length > 0) {
+        p.variants.forEach((v: any) => {
+          list.push({
+            ...p,
+            id: `${p.id}__${v.id}`,
+            variantId: v.id,
+            name: `${p.name} - ${v.name || v.shadeName || v.value || v.id}`,
+            stock: v.stock ?? 0,
+            originalProduct: p,
+          });
+        });
+      } else {
+        list.push({
+          ...p,
+          originalProduct: p,
+        });
+      }
+    });
+    return list;
+  }, [products]);
 
   const moves = stockMovements
     .filter((m) => (typeFilter === "all" || m.type === typeFilter) && (productFilter === "all" || m.productId === productFilter))
@@ -117,8 +142,8 @@ export default function StockManagement() {
       <Card className="mt-6 p-5">
         <h3 className="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Quick adjust</h3>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {products.filter((p) => p.status === "active").map((p) => (
-            <button key={p.id} onClick={() => { setSelected(p); setOpen(true); }} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left hover:border-slate-900 dark:border-slate-700 dark:hover:border-slate-400">
+          {flatProducts.map((p) => (
+            <button key={p.id} onClick={() => { setSelected(p.originalProduct); setSelectedVariantId(p.variantId); setOpen(true); }} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left hover:border-slate-900 dark:border-slate-700 dark:hover:border-slate-400">
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium text-slate-900 dark:text-white">{p.name}</div>
                 <div className="text-xs text-slate-400">{num(p.stock)} {p.unit}</div>
@@ -145,7 +170,7 @@ export default function StockManagement() {
         <DataTable data={moves} columns={columns} searchPlaceholder="Search movements…" />
       </div>
 
-      <AdjustModal open={open} onClose={() => setOpen(false)} product={selected} />
+      <AdjustModal open={open} onClose={() => setOpen(false)} product={selected} variantId={selectedVariantId} />
     </div>
   );
 }

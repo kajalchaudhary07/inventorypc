@@ -4,12 +4,13 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import toast from "react-hot-toast";
 import { type ColumnDef } from "@tanstack/react-table";
-import { Plus, Users, Pencil, IndianRupee } from "lucide-react";
+import { Plus, Users, Pencil, IndianRupee, Trash2 } from "lucide-react";
 import { Button, Field, Input, PageHeader, StatCard, Badge, Select } from "@/components/ui/primitives";
 import { DataTable } from "@/components/ui/DataTable";
 import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
 import { saveDoc, logActivity } from "@/services/data";
+import { deleteToBin } from "@/services/recycleBin";
 import { inr, num, uid } from "@/lib/utils";
 import type { Vendor } from "@/types";
 
@@ -172,8 +173,36 @@ export default function Vendors() {
     { header: "POs", accessorKey: "orders", cell: ({ getValue }) => <span className="tabular-nums">{num(getValue() as number)}</span> },
     { header: "Purchased", accessorKey: "purchased", cell: ({ getValue }) => <span className="font-semibold tabular-nums">{inr(getValue() as number)}</span> },
     { header: "Outstanding", accessorFn: (e) => e.vendor.outstanding, cell: ({ getValue }) => { const v = getValue() as number; return v > 0 ? <Badge color="rose">{inr(v)}</Badge> : <Badge color="emerald">Clear</Badge>; } },
-    { header: "", id: "actions", cell: ({ row }) => <button onClick={() => { setEditing(row.original.vendor); setOpen(true); }} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><Pencil className="h-4 w-4" /></button> },
+    { 
+      header: "", 
+      id: "actions", 
+      cell: ({ row }) => (
+        <div className="flex items-center gap-1">
+          <button 
+            onClick={() => { setEditing(row.original.vendor); setOpen(true); }} 
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            title="Edit Vendor"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+          <button 
+            onClick={() => handleDeleteVendor(row.original.vendor)} 
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950 dark:hover:text-rose-400"
+            title="Delete Vendor"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      ) 
+    },
   ];
+
+  const handleDeleteVendor = async (vendor: Vendor) => {
+    if (!window.confirm(`Delete vendor "${vendor.name}"? This item can be restored from the Recycle Bin.`)) return;
+    await deleteToBin("vendor", vendor.id, vendor.name, vendor, "vendors");
+    toast.success("Vendor moved to Recycle Bin");
+    setLocalVersion((v) => v + 1);
+  };
 
   return (
     <div>

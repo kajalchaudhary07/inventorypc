@@ -119,7 +119,7 @@ export default function OrderDetails() {
       const gstRate = Number(item.gstRate ?? item.gstPercent ?? item.gst ?? 0);
       const discount = Number(item.discount ?? 0);
       
-      const profit = cost > 0 ? (price - cost) * qty - discount : 0;
+      const profit = (price - cost) * qty;
       
       const netAmount = price * qty - discount;
       const gstAmount = (netAmount * gstRate) / 100;
@@ -147,7 +147,7 @@ export default function OrderDetails() {
 
   const totalProfit = useMemo(() => {
     return normalizedItems.reduce((acc, item) => {
-      return acc + (item.cost > 0 ? (item.price - item.cost) * item.qty - item.discount : 0);
+      return acc + (item.price - item.cost) * item.qty;
     }, 0);
   }, [normalizedItems]);
 
