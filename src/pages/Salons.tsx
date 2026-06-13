@@ -618,21 +618,20 @@ export default function Salons() {
                 <tr><td colSpan={4} className="py-10 text-center text-slate-400">No customers found.</td></tr>
               ) : (
                 filteredCustomers.map((c: any) => {
-                  const salonName = extractSalonName(c) || "-";
-                  const ownerName = extractOwnerName(c);
+                  const name = extractOwnerName(c) || getField(c, ["name", "displayName"]) || "-";
                   const email = extractEmail(c) || "-";
                   const phone = extractPhone(c) || "-";
-                  const salonName = getCustomerSalonName(c, salons);
+                  const salonName = getCustomerSalonName(c, salons) || extractSalonName(c) || "";
                   return (
                     <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                       <td className="px-4 py-3">
                         <div>
                           <div className="font-medium text-slate-900 dark:text-white">
                             {name}
-                            {salonName ? <span className="ml-1.5 text-xs text-slate-400"> · {salonName}</span> : null}
+                            {salonName && salonName !== "-" ? <span className="ml-1.5 text-xs text-slate-400"> · {salonName}</span> : null}
                           </div>
                           <div className="text-xs text-slate-400">
-                            {ownerName ? `${ownerName} · ` : ""}{email} · {phone}
+                            {email} · {phone}
                           </div>
                         </div>
                       </td>
