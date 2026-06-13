@@ -80,7 +80,7 @@ export default function RecycleBin() {
         }
       />
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="sticky top-[56px] z-10 bg-white/95 dark:bg-slate-900/95 backdrop-blur -mx-4 px-4 py-3 border-b border-slate-200/50 dark:border-slate-800/50 flex flex-wrap items-center justify-between gap-3 mt-4 mb-2">
         <div className="relative w-full max-w-xs">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <Input

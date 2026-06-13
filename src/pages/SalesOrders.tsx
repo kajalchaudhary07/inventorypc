@@ -7,7 +7,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
 import { useUIStore } from "@/store/uiStore";
-import { setOrderStatus, updateOrderPricing, saveDoc, logActivity } from "@/services/data";
+import { setOrderStatus, updateOrderPricing, saveDoc, logActivity, saveOrderPayment } from "@/services/data";
 import { deleteToBin } from "@/services/recycleBin";
 import { inr, fmtDateTime, uid, getOrderPaymentInfo } from "@/lib/utils";
 import { lineGst, lineNet, orderTotals } from "@/lib/calc";
@@ -723,6 +723,32 @@ export default function SalesOrders() {
   // Merge admin orders and inventory salesOrders. Prefer inventory-specific (salesOrders) when ids collide.
   const orders = useMemo(() => {
     const map = new Map<string, any>();
+    
+    const getField = (obj: any, keys: string[]) => {
+      for (const key of keys) {
+        if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
+          return obj[key];
+        }
+      }
+      return "";
+    };
+
+    const resolveOrderNames = (o: any) => {
+      const cid = o.salonId || o.customerId || o.userId || o.uid || "";
+      const salonObj = salons.find((x: any) => x.id === cid);
+      const appCust = adminCustomers.find((x: any) => x.id === cid);
+      
+      const ownerName = getField(salonObj, ["ownerName"]) || getField(appCust, ["ownerName", "name", "customerName", "displayName"]) || "";
+      const resolvedSalonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || o.salonName || o.customerName || "";
+      const customerName = o.salonName || getField(appCust, ["name", "customerName", "displayName", "ownerName"]) || getField(salonObj, ["ownerName", "name"]) || resolvedSalonName || "";
+      
+      return {
+        ownerName,
+        resolvedSalonName,
+        customerName
+      };
+    };
+
     // add inventory sales orders first (they take precedence)
     (salesOrders || []).forEach((o: any) => {
       const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
@@ -737,10 +763,25 @@ export default function SalesOrders() {
         discount: Number(item.discount ?? 0),
       }));
       const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
+      const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
+      
       map.set(o.id, {
         ...o,
+        id: o.id,
+        orderNo: o.orderNo || o.orderId || o.code || o.number || o.id,
+        salonName: resolvedSalonName || o.salonName || "-",
+        salonId: o.salonId || o.customerId || o.userId || o.uid || null,
         lines,
+        total: Number(o.total ?? o.amount ?? o.totalAmount ?? o.grandTotal ?? o.payableAmount ?? 0),
         profit,
+        createdAt: toMs(o.createdAt || o.orderDate || o.date),
+        status: o.status || o.orderStatus || "Pending",
+        channel: o.channel || o.source || "app",
+        paymentStatus: o.paymentStatus || o.payment_status || "Pending",
+        expectedDelivery: o.expectedDelivery,
+        ownerName,
+        resolvedSalonName,
+        customerName
       });
     });
     // add admin orders normalized so existing UI works
@@ -758,20 +799,24 @@ export default function SalesOrders() {
         discount: Number(item.discount ?? 0),
       }));
       const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
+      const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
+      const rawSalonName =
+        o.salonName ||
+        o.contactDetails?.receiverName ||
+        o.receiverName ||
+        o.customerName ||
+        o.customer?.name ||
+        o.userName ||
+        o.userId ||
+        "-";
+      const finalSalonName = resolvedSalonName || rawSalonName;
+      
       const normalized = {
         // keep raw doc for detail page
         ...o,
         id: o.id,
         orderNo: o.orderNo || o.orderId || o.code || o.number || o.id,
-        salonName:
-          o.salonName ||
-          o.contactDetails?.receiverName ||
-          o.receiverName ||
-          o.customerName ||
-          o.customer?.name ||
-          o.userName ||
-          o.userId ||
-          "-",
+        salonName: finalSalonName,
         salonId: o.salonId || o.customerId || o.userId || o.uid || null,
         lines,
         total: Number(o.total ?? o.amount ?? o.totalAmount ?? o.grandTotal ?? o.payableAmount ?? 0),
@@ -781,25 +826,37 @@ export default function SalesOrders() {
         channel: o.channel || o.source || "app",
         paymentStatus: o.paymentStatus || o.payment_status || "Pending",
         expectedDelivery: o.expectedDelivery,
+        ownerName,
+        resolvedSalonName: finalSalonName,
+        customerName: customerName || rawSalonName
       };
       map.set(o.id, normalized);
     });
     return Array.from(map.values());
-  }, [adminOrders, salesOrders]);
+  }, [adminOrders, salesOrders, salons, adminCustomers]);
+
   const [statusTab, setStatusTab] = useState("all");
   const [channel, setChannel] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState<"all" | "Paid" | "Unpaid" | "Partial">("all");
   const [invoice, setInvoice] = useState<SalesOrder | null>(null);
   const [notify, setNotify] = useState<SalesOrder | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-
-  const [dateFilter, setDateFilter] = useState<"all" | "week" | "month" | "custom">("all");
+ 
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("all");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
-
+ 
   const dateFilteredOrders = useMemo(() => {
     return orders.filter((o) => {
       if (dateFilter === "all") return true;
       const ts = o.createdAt;
+      if (dateFilter === "today") {
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        const endOfToday = new Date();
+        endOfToday.setHours(23, 59, 59, 999);
+        return ts >= startOfToday.getTime() && ts <= endOfToday.getTime();
+      }
       if (dateFilter === "week") {
         return ts >= Date.now() - 7 * 86400000;
       }
@@ -814,7 +871,7 @@ export default function SalesOrders() {
       return true;
     });
   }, [orders, dateFilter, customStart, customEnd]);
-
+ 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: dateFilteredOrders.length };
     STATUSES.forEach((s) => {
@@ -822,33 +879,60 @@ export default function SalesOrders() {
     });
     return c;
   }, [dateFilteredOrders]);
-
+ 
   const rows = dateFilteredOrders
-    .filter((o) => (statusTab === "all" || o.status === statusTab) && (channel === "all" || o.channel === channel))
+    .filter((o) => {
+      if (statusTab !== "all" && o.status !== statusTab) return false;
+      if (channel !== "all" && o.channel !== channel) return false;
+      if (paymentFilter !== "all") {
+        const { statusText } = getOrderPaymentInfo(o);
+        const normalizedPayment = statusText === "Partial Paid" ? "Partial" : statusText;
+        if (normalizedPayment !== paymentFilter) return false;
+      }
+      return true;
+    })
     .filter((o) => {
       const q = searchQuery.trim().toLowerCase();
       if (!q) return true;
       return (
         (o.orderNo || "").toLowerCase().includes(q) ||
         (o.id || "").toLowerCase().includes(q) ||
-        (o.salonName || "").toLowerCase().includes(q)
+        (o.salonName || "").toLowerCase().includes(q) ||
+        (o.resolvedSalonName || "").toLowerCase().includes(q) ||
+        (o.customerName || "").toLowerCase().includes(q) ||
+        (o.ownerName || "").toLowerCase().includes(q)
       );
     })
     .sort((a, b) => b.createdAt - a.createdAt);
-
-  const { statTotalOrders, statRevenue, statProfit, statPending } = useMemo(() => {
+ 
+  const { statTotalOrders, statRevenue, statProfit } = useMemo(() => {
     const totalOrders = dateFilteredOrders.length;
-    const delivered = dateFilteredOrders.filter((o) => o.status === "Delivered");
-    const revenue = delivered.reduce((sum, o) => sum + o.total, 0);
-    const profit = delivered.reduce((sum, o) => sum + o.profit, 0);
-    const pending = dateFilteredOrders.filter((o) => o.status === "Pending").length;
+    const eligibleOrders = dateFilteredOrders.filter((o) => {
+      const { statusText } = getOrderPaymentInfo(o);
+      return statusText === "Paid";
+    });
+    const revenue = eligibleOrders.reduce((sum, o) => sum + o.total, 0);
+    const profit = eligibleOrders.reduce((sum, o) => sum + o.profit, 0);
     return {
       statTotalOrders: totalOrders,
       statRevenue: revenue,
       statProfit: profit,
-      statPending: pending,
     };
   }, [dateFilteredOrders]);
+
+  const handlePaymentToggle = async (e: React.MouseEvent, o: SalesOrder) => {
+    e.stopPropagation();
+    const { statusText } = getOrderPaymentInfo(o);
+    const newAmount = statusText === "Paid" ? 0 : o.total;
+    const newStatus = statusText === "Paid" ? "Unpaid" : "Paid";
+    try {
+      await saveOrderPayment(o.id, newAmount);
+      toast.success(`Order ${o.orderNo} payment status updated to ${newStatus}`);
+    } catch (err: any) {
+      console.error("Error updating payment status:", err);
+      toast.error(`Error updating payment status: ${err.message || err}`);
+    }
+  };
 
   const changeStatus = async (o: SalesOrder, status: SalesStatus) => {
     try {
@@ -877,7 +961,7 @@ export default function SalesOrders() {
         <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
           <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Filter Date:</span>
           <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
-            {(["all", "week", "month", "custom"] as const).map((mode) => (
+            {(["all", "today", "week", "month", "custom"] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setDateFilter(mode)}
@@ -887,7 +971,7 @@ export default function SalesOrders() {
                     : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
                 }`}
               >
-                {mode === "all" ? "All Time" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
+                {mode === "all" ? "All Time" : mode === "today" ? "Today" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
               </button>
             ))}
           </div>
@@ -912,7 +996,7 @@ export default function SalesOrders() {
         </div>
 
         {/* Top Summary Stats Cards */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Card className="p-4 flex justify-between items-start">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Orders</p>
@@ -931,7 +1015,7 @@ export default function SalesOrders() {
               <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1 tabular-nums">
                 {inr(statRevenue)}
               </h3>
-              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">delivered only</p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">paid only</p>
             </div>
             <div className="rounded-lg bg-indigo-50 p-2 text-indigo-500 dark:bg-indigo-950/50 dark:text-indigo-400">
               <FileText className="h-5 w-5" />
@@ -944,21 +1028,9 @@ export default function SalesOrders() {
               <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1 tabular-nums">
                 {inr(statProfit)}
               </h3>
-              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">delivered only</p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">paid only</p>
             </div>
             <div className="rounded-lg bg-emerald-50 p-2 text-emerald-500 dark:bg-emerald-950/50 dark:text-emerald-400">
-              <FileText className="h-5 w-5" />
-            </div>
-          </Card>
-
-          <Card className="p-4 flex justify-between items-start">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Pending</p>
-              <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1 tabular-nums">
-                {statPending}
-              </h3>
-            </div>
-            <div className="rounded-lg bg-amber-50 p-2 text-amber-500 dark:bg-amber-950/50 dark:text-amber-400">
               <FileText className="h-5 w-5" />
             </div>
           </Card>
@@ -992,6 +1064,26 @@ export default function SalesOrders() {
             </button>
           );
         })}
+
+        <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 mx-2"></div>
+
+        {(["all", "Paid", "Unpaid", "Partial"] as const).map((pStatus) => {
+          const isActive = paymentFilter === pStatus;
+          return (
+            <button
+              key={pStatus}
+              onClick={() => setPaymentFilter(pStatus)}
+              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
+                isActive
+                  ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
+                  : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+              }`}
+            >
+              <span>{pStatus === "all" ? "All Payments" : pStatus}</span>
+            </button>
+          );
+        })}
+
         <Select value={channel} onChange={(e) => setChannel(e.target.value)} className="ml-auto w-auto">
           <option value="all">All channels</option>
           <option value="app">App</option>
@@ -1001,22 +1093,24 @@ export default function SalesOrders() {
         </Select>
       </div>
 
-      {/* Search Bar */}
-      <div className="mb-4 mt-6 relative max-w-md">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <Input
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search by Order ID or Salon Name..."
-          className="pl-9"
-        />
+      {/* Sticky Search Bar Container */}
+      <div className="sticky top-[56px] z-10 bg-white/95 py-3 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200/50 dark:border-slate-800/50 mb-4 mt-6 -mx-4 px-4">
+        <div className="relative w-full max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by Order ID, Salon Name, or Owner Name..."
+            className="pl-9"
+          />
+        </div>
       </div>
 
       <div className="space-y-3">
         {rows.map((o) => {
           const { billAmount, amountPaid, balanceAmount, statusText, statusColor } = getOrderPaymentInfo(o);
           return (
-            <div key={o.id} onClick={() => navigate(`/orders/${o.id}`)} className="cursor-pointer">
+            <div key={o.id}>
               <Card className="p-4">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="w-24">
@@ -1026,38 +1120,27 @@ export default function SalesOrders() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">
                       {(() => {
-                        const isPcOrder = (o.orderNo || "").startsWith("PC-") || (o.id || "").startsWith("PC-");
-                        if (isPcOrder) {
-                          const cid = o.salonId || o.customerId || o.userId || o.uid || "";
-                          const salonObj = salons.find((s: any) => s.id === cid);
-                          const appCust = adminCustomers.find((c: any) => c.id === cid);
-                          
-                          const getField = (obj: any, keys: string[]) => {
-                            for (const key of keys) {
-                              if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
-                                return obj[key];
-                              }
-                            }
-                            return "";
-                          };
-
-                          const customerName = o.salonName || getField(appCust, ["name", "customerName", "displayName", "ownerName"]) || getField(salonObj, ["ownerName", "name"]) || "-";
-                          const salonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || "-";
-                          
-                          if (salonName && salonName !== "-") {
-                            return (
-                              <span>
-                                {salonName} <span className="text-xs text-slate-400 font-normal">({customerName})</span>
-                              </span>
-                            );
-                          }
-                          return <span>{customerName}</span>;
+                        const salonName = o.resolvedSalonName || o.salonName;
+                        const custName = o.customerName;
+                        if (salonName && salonName !== "-" && custName && custName !== "-" && custName !== salonName) {
+                          return (
+                            <span>
+                              {salonName} <span className="text-xs text-slate-400 font-normal">({custName})</span>
+                            </span>
+                          );
                         }
-                        return o.salonName;
+                        return <span>{salonName || custName || "-"}</span>;
                       })()}
                     </div>
                     <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                      <StatusBadge value={o.channel} /> {o.lines.length} items · <Badge color={statusColor}>{statusText}</Badge>
+                      <StatusBadge value={o.channel} /> {o.lines.length} items ·{" "}
+                      <button
+                        onClick={(e) => handlePaymentToggle(e, o)}
+                        className="hover:scale-105 active:scale-95 transition cursor-pointer"
+                        title={statusText === "Paid" ? "Click to mark as Unpaid" : "Click to mark as Paid"}
+                      >
+                        <Badge color={statusColor}>{statusText}</Badge>
+                      </button>
                     </div>
                   </div>
                   <div className="text-right flex flex-col justify-center items-end text-xs">

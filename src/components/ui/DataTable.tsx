@@ -36,11 +36,30 @@ export function DataTable<T>({ data, columns, searchPlaceholder = "Search…", p
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     initialState: { pagination: { pageSize } },
+    globalFilterFn: (row, _columnId, filterValue) => {
+      const q = String(filterValue).trim().toLowerCase();
+      if (!q) return true;
+      const searchObj = (obj: any): boolean => {
+        if (obj == null) return false;
+        if (typeof obj === "string" || typeof obj === "number" || typeof obj === "boolean") {
+          return String(obj).toLowerCase().includes(q);
+        }
+        if (Array.isArray(obj)) {
+          return obj.some(searchObj);
+        }
+        if (typeof obj === "object") {
+          if (obj.$$typeof) return false;
+          return Object.values(obj).some(searchObj);
+        }
+        return false;
+      };
+      return searchObj(row.original);
+    }
   });
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="sticky top-[56px] z-10 -mx-4 px-4 bg-white/95 py-3 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200/50 dark:border-slate-800/50 flex flex-wrap items-center justify-between gap-3">
         <div className="relative w-full max-w-xs">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <Input

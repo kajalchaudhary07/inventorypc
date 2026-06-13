@@ -587,7 +587,7 @@ export default function Salons() {
 
       {/* ── App Customers (from admin dashboard, read-only) ─────────────── */}
       <div className="mt-10">
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="sticky top-[56px] z-10 bg-white/95 dark:bg-slate-900/95 backdrop-blur -mx-4 px-4 py-3 border-b border-slate-200/50 dark:border-slate-800/50 flex items-center justify-between gap-3 mb-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-white">App Customers</h2>
             <p className="text-xs text-slate-500">All users from the admin dashboard · {adminCustomers.length} total</p>

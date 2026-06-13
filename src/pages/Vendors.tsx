@@ -215,38 +215,42 @@ export default function Vendors() {
         <StatCard icon={IndianRupee} label="Payable" value={inr(totals.outstanding)} accent="bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300" />
       </div>
 
-      {/* Top Status Filter */}
-      <div className="mb-4 mt-6 flex flex-wrap gap-2">
-        {["all", ...VENDOR_STATUSES].map((s) => {
-          const isActive = filter === s;
-          const count = s === "all" ? counts.all : counts[s];
-          return (
-            <button
-              key={s}
-              onClick={() => setFilter(s)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
-                isActive
-                  ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
-                  : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-              }`}
-            >
-              <span>{s === "all" ? "All" : s}</span>
-              <span
-                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-                  isActive
-                    ? "bg-white/20 text-white"
-                    : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-                }`}
-              >
-                {count}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
       <div className="mt-6">
-        <DataTable data={filteredRows} columns={columns} searchPlaceholder="Search vendors…" />
+        <DataTable
+          data={filteredRows}
+          columns={columns}
+          searchPlaceholder="Search vendors…"
+          toolbar={
+            <div className="flex flex-wrap gap-1.5">
+              {["all", ...VENDOR_STATUSES].map((s) => {
+                const isActive = filter === s;
+                const count = s === "all" ? counts.all : counts[s];
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setFilter(s)}
+                    className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1 ${
+                      isActive
+                        ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
+                        : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+                    }`}
+                  >
+                    <span>{s === "all" ? "All" : s}</span>
+                    <span
+                      className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+                        isActive
+                          ? "bg-white/20 text-white"
+                          : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          }
+        />
       </div>
 
       <VendorForm open={open} onClose={() => { setOpen(false); setLocalVersion((v) => v + 1); }} editing={editing} />

@@ -41,15 +41,6 @@ export function Topbar() {
         <Menu className="h-5 w-5" />
       </button>
 
-      <div className="relative hidden max-w-sm flex-1 sm:block">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <input
-          onFocus={() => navigate("/app-products")}
-          placeholder="Search products, orders, salons…"
-          className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-9 pr-3 text-sm outline-none focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-        />
-      </div>
-
       <div className="ml-auto flex items-center gap-2">
         {!isFirebaseConfigured && (
           <span className="hidden items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-900 lg:inline-flex">

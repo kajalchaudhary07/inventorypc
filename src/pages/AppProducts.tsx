@@ -533,6 +533,7 @@ export default function AppProductsPage() {
       list = list.filter((p) =>
         (p.name?.toLowerCase() || "").includes(q) ||
         (p.sku?.toLowerCase() || "").includes(q) ||
+        (p.brand?.toLowerCase() || "").includes(q) ||
         (p.category?.toLowerCase() || p.categoryName?.toLowerCase() || "").includes(q)
       );
     return list;
@@ -642,10 +643,10 @@ export default function AppProductsPage() {
 
       {/* Table */}
       <Card>
-        <div className="p-4 border-b">
-          <div className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-lg border">
+        <div className="sticky top-[56px] z-10 bg-white/95 dark:bg-slate-900/95 backdrop-blur p-4 border-b border-slate-200 dark:border-slate-800 rounded-t-xl">
+          <div className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-lg border dark:bg-slate-800/50 dark:border-slate-700">
             <Search size={18} className="text-gray-400 shrink-0" />
-            <Input placeholder="Search by name, SKU, or category..." value={search}
+            <Input placeholder="Search by name, SKU, brand, or category..." value={search}
               onChange={(e) => setSearch(e.target.value)} className="border-none bg-transparent" />
           </div>
         </div>
