@@ -25,7 +25,16 @@ const getField = (obj: any, keys: string[]) => {
   return "";
 };
 
-const extractName = (obj: any) => getField(obj, ["name", "customerName", "ownerName", "displayName", "salonName"]);
+const extractName = (obj: any) => getField(obj, ["salonName", "salon", "name", "customerName", "displayName"]);
+const extractSalonName = extractName;
+const extractOwnerName = (obj: any) => {
+  const salonName = getField(obj, ["salonName", "salon"]);
+  const ownerName = getField(obj, ["ownerName", "name", "displayName"]);
+  if (salonName === "" && ownerName !== "") {
+    return "";
+  }
+  return ownerName;
+};
 const extractPhone = (obj: any) => getField(obj, ["phone", "mobile", "phoneNumber", "customerPhone", "ownerPhone"]);
 const extractEmail = (obj: any) => getField(obj, ["email", "customerEmail", "ownerEmail", "salonEmail", "userEmail"]);
 
@@ -609,7 +618,8 @@ export default function Salons() {
                 <tr><td colSpan={4} className="py-10 text-center text-slate-400">No customers found.</td></tr>
               ) : (
                 filteredCustomers.map((c: any) => {
-                  const name = extractName(c) || "-";
+                  const salonName = extractSalonName(c) || "-";
+                  const ownerName = extractOwnerName(c);
                   const email = extractEmail(c) || "-";
                   const phone = extractPhone(c) || "-";
                   const salonName = getCustomerSalonName(c, salons);
@@ -622,7 +632,7 @@ export default function Salons() {
                             {salonName ? <span className="ml-1.5 text-xs text-slate-400"> · {salonName}</span> : null}
                           </div>
                           <div className="text-xs text-slate-400">
-                            {email} · {phone}
+                            {ownerName ? `${ownerName} · ` : ""}{email} · {phone}
                           </div>
                         </div>
                       </td>

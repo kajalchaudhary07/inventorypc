@@ -1024,11 +1024,14 @@ export default function SalesOrders() {
                           const customerName = o.salonName || getField(appCust, ["name", "customerName", "displayName", "ownerName"]) || getField(salonObj, ["ownerName", "name"]) || "-";
                           const salonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || "-";
                           
-                          return (
-                            <span>
-                              {customerName} <span className="text-xs text-slate-400 font-normal">({salonName})</span>
-                            </span>
-                          );
+                          if (salonName && salonName !== "-") {
+                            return (
+                              <span>
+                                {salonName} <span className="text-xs text-slate-400 font-normal">({customerName})</span>
+                              </span>
+                            );
+                          }
+                          return <span>{customerName}</span>;
                         }
                         return o.salonName;
                       })()}

@@ -23,7 +23,15 @@ const getField = (obj: any, keys: string[]) => {
   return "";
 };
 
-const extractName = (obj: any) => getField(obj, ["name", "customerName", "ownerName", "displayName", "salonName"]);
+const extractSalonName = (obj: any) => getField(obj, ["salonName", "salon", "name", "customerName", "displayName"]);
+const extractOwnerName = (obj: any) => {
+  const salonName = getField(obj, ["salonName", "salon"]);
+  const ownerName = getField(obj, ["ownerName", "name", "displayName"]);
+  if (salonName === "" && ownerName !== "") {
+    return "";
+  }
+  return ownerName;
+};
 const extractPhone = (obj: any) => getField(obj, ["phone", "mobile", "phoneNumber", "customerPhone", "ownerPhone"]);
 const extractEmail = (obj: any) => getField(obj, ["email", "customerEmail", "ownerEmail", "salonEmail", "userEmail"]);
 
@@ -43,10 +51,11 @@ export default function AppCustomersPage() {
     if (!q) return customers;
 
     return customers.filter((c) => {
-      const cName = extractName(c).toLowerCase();
+      const cSalonName = extractSalonName(c).toLowerCase();
+      const cOwnerName = extractOwnerName(c).toLowerCase();
       const cPhone = extractPhone(c).toLowerCase();
       const cEmail = extractEmail(c).toLowerCase();
-      return cName.includes(q) || cPhone.includes(q) || cEmail.includes(q);
+      return cSalonName.includes(q) || cOwnerName.includes(q) || cPhone.includes(q) || cEmail.includes(q);
     });
   }, [customers, search]);
 
@@ -87,16 +96,17 @@ export default function AppCustomersPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((customer) => {
-                  const name = extractName(customer) || "-";
+                  const salonName = extractSalonName(customer) || "-";
+                  const ownerName = extractOwnerName(customer);
                   const email = extractEmail(customer) || "-";
                   const phone = extractPhone(customer) || "-";
                   return (
                     <tr key={customer.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4">
                         <div>
-                          <div className="font-medium text-slate-900">{name}</div>
+                          <div className="font-medium text-slate-900">{salonName}</div>
                           <div className="text-xs text-slate-400">
-                            {email} · {phone}
+                            {ownerName ? `${ownerName} · ` : ""}{email} · {phone}
                           </div>
                         </div>
                       </td>

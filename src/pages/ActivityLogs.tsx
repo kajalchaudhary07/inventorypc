@@ -41,7 +41,7 @@ export default function ActivityLogs() {
     if (log.entity === "salon") {
       const salon = salons.find(s => s.id === log.entityId || s.name === log.detail);
       const name = salon?.name || log.detail || "-";
-      const tier = salon?.tier || salon?.type || "-";
+      const tier = (salon as any)?.tier || (salon as any)?.type || "-";
       const region = salon?.region || "-";
       return `Salon: ${name} · Tier/Type: ${tier} · Region: ${region}`;
     }
@@ -49,7 +49,7 @@ export default function ActivityLogs() {
     if (log.entity === "vendor") {
       const vendor = vendors.find(v => v.id === log.entityId || v.name === log.detail);
       const name = vendor?.name || log.detail || "-";
-      const category = vendor?.category || "-";
+      const category = (vendor as any)?.category || "-";
       return `Vendor: ${name} · Category: ${category}`;
     }
 

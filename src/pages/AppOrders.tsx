@@ -30,6 +30,9 @@ const formatCurrency = (amount: number | undefined) => {
 export default function AppOrdersPage() {
   const [search, setSearch] = useState("");
   const adminOrders = useDataStore((state: any) => state.adminOrders || []);
+  const adminCustomers = useDataStore((state: any) => state.adminCustomers || []);
+  const salons = useDataStore((state: any) => state.salons || []);
+
   const orders = useMemo(() => adminOrders, [adminOrders]) as AppOrder[];
   const stats = useMemo(() => {
     const totalOrders = orders.length;
@@ -50,16 +53,46 @@ export default function AppOrdersPage() {
     };
   }, [orders]);
 
+  const getField = (obj: any, keys: string[]) => {
+    for (const key of keys) {
+      if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
+        return obj[key];
+      }
+    }
+    return "";
+  };
+
+  const resolveCustomerName = (order: AppOrder) => {
+    const cid = order.salonId || order.customerId || order.userId || order.uid || "";
+    const appCust = adminCustomers.find((c: any) => c.id === cid);
+    const salonObj = salons.find((s: any) => s.id === cid);
+    const matched = appCust || salonObj;
+
+    if (matched) {
+      const customerName = getField(matched, ["name", "customerName", "displayName", "ownerName"]) || order.customerName || "-";
+      const salonName = getField(matched, ["salonName", "salon"]) || (matched.name && matched.ownerName ? matched.name : "") || "-";
+      if (salonName && salonName !== "-") {
+        return `${salonName} (${customerName})`;
+      }
+      return customerName;
+    }
+    
+    return order.customerName || "-";
+  };
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return orders;
 
-    return orders.filter((o) =>
-      (o.orderId?.toLowerCase() || "").includes(q) ||
-      (o.orderRef?.toLowerCase() || "").includes(q) ||
-      (o.customerName?.toLowerCase() || "").includes(q)
-    );
-  }, [orders, search]);
+    return orders.filter((o) => {
+      const resolvedName = resolveCustomerName(o).toLowerCase();
+      return (
+        (o.orderId?.toLowerCase() || "").includes(q) ||
+        (o.orderRef?.toLowerCase() || "").includes(q) ||
+        resolvedName.includes(q)
+      );
+    });
+  }, [orders, search, adminCustomers, salons]);
 
   const getOrderStatus = (order: AppOrder) => {
     return order.orderStatus || order.status || "pending";
@@ -155,7 +188,7 @@ export default function AppOrdersPage() {
                       <span className="font-medium">{getOrderId(order)}</span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className="text-sm">{order.customerName || "-"}</span>
+                      <span className="text-sm">{resolveCustomerName(order)}</span>
                     </td>
                     <td className="px-6 py-4 font-medium">{formatCurrency(order.amount)}</td>
                     <td className="px-6 py-4">

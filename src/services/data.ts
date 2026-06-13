@@ -852,7 +852,7 @@ export async function updateVariantField(
         : { [field]: value };
 
   try {
-    await updateDoc(doc(db, "products", productId, "variants", variantId), payload);
+    await updateDoc(doc(db, "products", productId, "variants", variantId), payload as any);
   } catch {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const state = useDataStore.getState() as any;
