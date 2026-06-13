@@ -50,32 +50,34 @@ export function exportCsv(rows: Record<string, unknown>[], filename: string) {
 export const daysAgo = (d: number) => Date.now() - d * 86400000;
 
 export function getOrderPaymentInfo(order: any) {
-  const localPaymentsStr = typeof window !== "undefined" ? localStorage.getItem("pc_order_payments") : null;
-  const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
-  
   const total = Number(order.total ?? 0);
   let amountPaid = 0;
   
-  if (order.id && localPayments[order.id] !== undefined) {
-    amountPaid = Number(localPayments[order.id]);
+  // Priority 1: amountPaid field on the document (Firestore-persisted)
+  if (order.amountPaid !== undefined && order.amountPaid !== null) {
+    amountPaid = Number(order.amountPaid);
   } else {
-    // Fallback based on original payment status
-    const status = String(order.paymentStatus || "").toLowerCase();
-    if (status === "paid") {
-      amountPaid = total;
-    } else if (status === "partial") {
-      amountPaid = total / 2;
+    // Priority 2: localStorage cache (backward compatibility)
+    const localPaymentsStr = typeof window !== "undefined" ? localStorage.getItem("pc_order_payments") : null;
+    const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
+    
+    if (order.id && localPayments[order.id] !== undefined) {
+      amountPaid = Number(localPayments[order.id]);
     } else {
-      amountPaid = 0;
+      // Priority 3: Infer from paymentStatus
+      const status = String(order.paymentStatus || "").toLowerCase();
+      if (status === "paid") {
+        amountPaid = total;
+      } else if (status === "partial") {
+        amountPaid = total / 2;
+      } else {
+        amountPaid = 0;
+      }
     }
   }
   
   const balanceAmount = Math.max(0, total - amountPaid);
   
-  // Status logic:
-  // If Amount Paid is 0 show 'Unpaid' (in red/rose)
-  // If greater than 0 but less than bill show 'Partial Paid' (yellow/amber)
-  // If equal to or greater show 'Paid' (green/emerald)
   let statusText = "Unpaid";
   let statusColor = "rose";
   

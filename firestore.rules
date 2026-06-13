@@ -1,54 +1,323 @@
 rules_version = '2';
-
-// ========================================================================
-// UNIFIED SECURITY RULES FOR BOTH DASHBOARDS (Inventory + Ecommerce Admin)
-// 
-// Access Control:
-// - Admins & SuperAdmins: Full read/write access
-// - Others: No access
-//
-// Setup:
-// 1. Go to Firestore > Create collection "admins"
-// 2. Add document: Document ID = user's UID, fields: { role: "admin" }
-// 3. That's it! Works for both dashboards
-// ========================================================================
-
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isAdmin() {
-      return request.auth != null 
-        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    function signedIn() {
+      return request.auth != null;
     }
 
-    // ===== INVENTORY COLLECTIONS (Salon Inventory Dashboard) =====
-    match /products/{id}        { allow read, write: if isAdmin(); }
-    match /{path=**}/variants/{id} { allow read, write: if isAdmin(); }
-    match /inventoryProducts/{id} { allow read, write: if isAdmin(); }
+    function isAdmin() {
+      return signedIn() &&
+        (request.auth.token.admin == true ||
+         request.auth.token.superAdmin == true);
+    }
+
+    function isSuperAdmin() {
+      return signedIn() && request.auth.token.superAdmin == true;
+    }
+
+    // TEMP helper to unblock dashboard banner management if claims are still rolling out.
+    // Once all admin claims are stable, change this to: return isAdmin();
+    function canManageBanners() {
+      return signedIn();
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isOrderOwnerFromResource() {
+      return signedIn() && (
+        request.auth.uid == resource.data.uid ||
+        request.auth.uid == resource.data.userId ||
+        request.auth.uid == resource.data.customerId
+      );
+    }
+
+    function isSafeOwnerCancellationUpdate() {
+      return isOrderOwnerFromResource() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'orderStatus',
+          'cancelledBy',
+          'cancelledByUid',
+          'cancellationSource',
+          'cancellationReason',
+          'cancelledAt',
+          'updatedAt'
+        ]) &&
+        request.resource.data.status == 'cancelled' &&
+        request.resource.data.orderStatus == 'cancelled' &&
+        request.resource.data.cancelledBy == 'user' &&
+        request.resource.data.cancelledByUid == request.auth.uid &&
+        request.resource.data.cancellationSource == 'app_user' &&
+        request.resource.data.cancellationReason is string &&
+        request.resource.data.cancellationReason.size() > 0 &&
+        request.resource.data.cancellationReason.size() <= 200;
+    }
+
+    function hasPurchasedProduct(productId) {
+      return signedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.purchasedProductIds.hasAny([productId]);
+    }
+
+    function isValidProductSuggestionCreate() {
+      return request.resource.data.uid is string &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() > 0 &&
+        request.resource.data.text.size() <= 1000 &&
+        request.resource.data.orderRef is string &&
+        request.resource.data.orderRef.size() > 0 &&
+        request.resource.data.orderRef.size() <= 80 &&
+        request.resource.data.orderId is string &&
+        request.resource.data.orderId.size() > 0 &&
+        request.resource.data.orderId.size() <= 80 &&
+        request.resource.data.status is string &&
+        request.resource.data.status in ['submitted', 'pending', 'approved', 'rejected'] &&
+        request.resource.data.imageUrl is string &&
+        request.resource.data.imagePath is string &&
+        request.resource.data.adminNotes is string;
+    }
+
+    function isApprovedReview() {
+      return resource.data.status == "approved" ||
+        resource.data.approved == true;
+    }
+
+    // Support chat helpers (deterministic chat ID: support_<uid>)
+    function supportChatIdForCurrentUser() {
+      return signedIn() ? ("support_" + request.auth.uid) : "";
+    }
+
+    function isSupportChatOwner(chatId) {
+      return signedIn() && chatId == supportChatIdForCurrentUser();
+    }
+
+    // --- Catalog: app can read, only admin can write ---
+    match /products/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+
+      // Product variants subcollection
+      match /variants/{variantId} {
+        allow read: if true;
+        allow create, update, delete: if isAdmin();
+      }
+
+      // Product reviews subcollection
+      match /reviews/{reviewId} {
+        allow read: if isAdmin() ||
+          isApprovedReview() ||
+          (signedIn() && request.auth.uid == reviewId);
+
+        allow create: if signedIn() &&
+          request.auth.uid == reviewId &&
+          hasPurchasedProduct(docId);
+
+        allow update: if isAdmin() || (
+          signedIn() &&
+          request.auth.uid == reviewId &&
+          hasPurchasedProduct(docId)
+        );
+
+        allow delete: if isAdmin() || isOwner(reviewId);
+      }
+    }
+
+    match /brands/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /categories/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /subCategories/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /subSubCategories/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /attributes/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Top-level mirrored reviews for dashboard reliability
+    match /productReviews/{reviewDocId} {
+      allow read: if isAdmin() ||
+        isApprovedReview() ||
+        (signedIn() && request.auth.uid == resource.data.userId);
+
+      allow create: if signedIn() &&
+        request.auth.uid == request.resource.data.userId &&
+        hasPurchasedProduct(request.resource.data.productId);
+
+      allow update: if isAdmin() || (
+        signedIn() &&
+        request.auth.uid == request.resource.data.userId &&
+        hasPurchasedProduct(request.resource.data.productId)
+      );
+
+      allow delete: if isAdmin() ||
+        (signedIn() && request.auth.uid == resource.data.userId);
+    }
+
+    // ===== INVENTORY DASHBOARD COLLECTIONS =====
     match /itemGroups/{id}      { allow read, write: if isAdmin(); }
     match /salons/{id}          { allow read, write: if isAdmin(); }
     match /vendors/{id}         { allow read, write: if isAdmin(); }
     match /stockMovements/{id}  { allow read, write: if isAdmin(); }
     match /purchaseOrders/{id}  { allow read, write: if isAdmin(); }
     match /salesOrders/{id}     { allow read, write: if isAdmin(); }
-    match /invoices/{id}        { allow read, write: if isAdmin(); }
-    match /reports/{id}         { allow read, write: if isAdmin(); }
     match /activityLogs/{id}    { allow read, write: if isAdmin(); }
+    match /settings/{id}        { allow read, write: if isAdmin(); }
+    match /inventoryProducts/{id} { allow read, write: if isAdmin(); }
 
-    // ===== ECOMMERCE COLLECTIONS (Both apps share same DB) =====
-    match /users/{id}           { allow read, write: if isAdmin(); }
-    match /categories/{id}      { allow read, write: if isAdmin(); }
-    match /orders/{id}          { allow read, write: if isAdmin(); }
-    match /transactions/{id}    { allow read, write: if isAdmin(); }
-    match /coupons/{id}         { allow read, write: if isAdmin(); }
-
-    // ===== ADMIN MANAGEMENT =====
-    match /admins/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
-      allow write: if false;  // Manage admins from Firebase Console only
+    // --- User profile ---
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create, update: if isOwner(uid) || isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // Deny everything else
-    match /{document=**} { allow read, write: if false; }
+    // Verification requests (new user access approvals)
+    match /verificationRequests/{requestId} {
+      allow create: if signedIn();
+      allow read: if isAdmin() || (signedIn() && (
+        request.auth.uid == resource.data.userId ||
+        request.auth.uid == resource.data.uid ||
+        request.auth.uid == resource.data.customerId
+      ));
+      allow update, delete: if isAdmin();
+    }
+
+    // Orders
+    match /orders/{orderId} {
+      allow create: if signedIn() &&
+        isOwner(request.resource.data.uid) &&
+        (request.resource.data.userId == request.auth.uid ||
+         request.resource.data.userId == request.resource.data.uid) &&
+        (request.resource.data.customerId == request.auth.uid ||
+         request.resource.data.customerId == request.resource.data.uid);
+      allow read: if signedIn() &&
+        (isAdmin() ||
+         request.auth.uid == resource.data.uid ||
+         request.auth.uid == resource.data.userId ||
+         request.auth.uid == resource.data.customerId);
+      allow update: if isAdmin() || isSafeOwnerCancellationUpdate();
+      allow delete: if isAdmin();
+    }
+
+    // Backend-verified payment transaction records
+    match /payments/{txnid} {
+      allow read: if signedIn() &&
+        (isAdmin() || request.auth.uid == resource.data.userId);
+      allow create, update, delete: if false;
+    }
+
+    // Optional product share analytics
+    match /productShares/{docId} {
+      allow create: if signedIn();
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    match /productSuggestions/{docId} {
+      allow create: if signedIn() && isValidProductSuggestionCreate();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // Banners (dashboard + app)
+    match /banners/{docId} {
+      allow read: if true;
+      allow create, update, delete: if canManageBanners();
+    }
+
+    // Dashboard collections
+    match /admins/{docId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    match /bot_config/{docId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /bulkLeads/{docId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /coupons/{docId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /notifications/{docId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /rolePermissions/{docId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    match /app_settings/{docId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // --- Support Chat ---
+    // Chat doc id must be: support_<uid>
+    match /chats/{chatId} {
+      allow read: if isAdmin() || isSupportChatOwner(chatId);
+
+      allow create: if isSupportChatOwner(chatId) &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if isAdmin() || isSupportChatOwner(chatId);
+
+      allow delete: if isAdmin();
+
+      match /messages/{messageId} {
+        allow read: if isAdmin() || isSupportChatOwner(chatId);
+
+        allow create: if signedIn() && (
+          // Customer sends own message in own support chat
+          (isSupportChatOwner(chatId) &&
+            request.resource.data.senderId == request.auth.uid &&
+            (
+              request.resource.data.senderRole == "user" ||
+              request.resource.data.sender == "user"
+            ) &&
+            request.resource.data.chatId == chatId) ||
+
+          // Admin can send from admin account
+          (isAdmin() &&
+            request.resource.data.senderId == request.auth.uid &&
+            request.resource.data.chatId == chatId)
+        );
+
+        // Allow both sides to update (e.g. seen flag)
+        allow update: if isAdmin() || isSupportChatOwner(chatId);
+
+        allow delete: if isAdmin();
+      }
+    }
+
+    // Deny everything else by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
   }
 }

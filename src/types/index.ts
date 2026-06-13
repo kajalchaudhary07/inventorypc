@@ -54,6 +54,9 @@ export interface Salon {
   description?: string;
   outstanding: number;
   totalPurchases: number;
+  status?: string;
+  tier?: string;
+  type?: string;
   createdAt: number;
 }
 
@@ -67,6 +70,8 @@ export interface Vendor {
   address?: string;
   totalPurchased: number;
   outstanding: number;
+  status?: string;
+  category?: string;
   createdAt: number;
 }
 
@@ -106,6 +111,10 @@ export interface SalesOrder {
   profit: number;
   status: SalesStatus;
   paymentStatus: PaymentStatus;
+  amountPaid?: number; // Persisted paid amount (Firestore)
+  customerId?: string;
+  userId?: string;
+  uid?: string;
   createdAt: number;
   // Editable-invoice extras (all optional for backward compatibility).
   extraCharges?: ExtraCharge[]; // custom rows below GST (surge, packaging, round-off…)
@@ -139,6 +148,7 @@ export interface PurchaseOrder {
   lines: PurchaseLine[];
   total: number;
   status: PurchaseStatus;
+  amountPaid?: number; // Persisted paid amount (Firestore)
   expectedDate?: number;
   createdAt: number;
 }

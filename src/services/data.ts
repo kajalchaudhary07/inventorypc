@@ -3,6 +3,7 @@ import {
   collectionGroup,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   setDoc,
   updateDoc,
@@ -10,6 +11,7 @@ import {
 import { db, isFirebaseConfigured } from "@/lib/firebase";
 import { useDataStore } from "@/store/dataStore";
 import { useAuthStore } from "@/store/authStore";
+import { useUIStore } from "@/store/uiStore";
 import { uid, inr } from "@/lib/utils";
 import { orderTotals } from "@/lib/calc";
 import type {
@@ -108,7 +110,7 @@ function transformEcommerceProduct(ecomProduct: any): Product {
 export function initData(): () => void {
   if (!isFirebaseConfigured || !db) {
     useDataStore.getState().loadSeed();
-    return () => {};
+    return () => { };
   }
   const unsubs: (() => void)[] = [];
 
@@ -208,8 +210,30 @@ export function initData(): () => void {
     );
   });
 
+  // Listen to settings doc
+  unsubs.push(
+    onSnapshot(doc(db!, "settings", "app"), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        useUIStore.getState().setSettings(data as any);
+      }
+    })
+  );
+
   useDataStore.setState({ loaded: true });
   return () => unsubs.forEach((u) => u());
+}
+
+// Save app settings to Firestore
+export async function saveSettings(settings: Record<string, unknown>) {
+  if (isFirebaseConfigured && db) {
+    const clean = Object.fromEntries(
+      Object.entries(settings).filter(([_, v]) => v !== undefined)
+    );
+    await setDoc(doc(db, "settings", "app"), clean, { merge: true });
+  }
+  // Also update local store (zustand persists to localStorage too)
+  useUIStore.getState().setSettings(settings as any);
 }
 
 // Generic upsert / delete that target Firestore (live) or the in-memory store (demo).
@@ -257,6 +281,89 @@ export function logActivity(action: string, entity: string, detail: string, enti
   void saveDoc("activityLogs", log);
 }
 
+// Save payment amount for a sales order to Firestore
+export async function saveOrderPayment(orderId: string, amountPaid: number) {
+  // Save to salesOrders collection
+  if (isFirebaseConfigured && db) {
+    try {
+      // Try updating salesOrders doc first
+      await updateDoc(doc(db, "salesOrders", orderId), { amountPaid });
+    } catch {
+      // If salesOrders doc doesn't exist, create it with merge
+      await setDoc(doc(db, "salesOrders", orderId), { amountPaid }, { merge: true });
+    }
+
+    // Also update admin orders doc if it exists there
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adminOrders = (useDataStore.getState() as any).adminOrders || [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const isAdminOrder = adminOrders.some((o: any) => o.id === orderId);
+    if (isAdminOrder) {
+      try {
+        await updateDoc(doc(db, "orders", orderId), { amountPaid });
+      } catch (err) {
+        console.warn("[saveOrderPayment] Could not update orders/ doc:", err);
+      }
+    }
+  }
+
+  // Also update localStorage for backward compatibility
+  try {
+    const localPaymentsStr = localStorage.getItem("pc_order_payments");
+    const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
+    localPayments[orderId] = amountPaid;
+    localStorage.setItem("pc_order_payments", JSON.stringify(localPayments));
+  } catch { /* ignore */ }
+
+  // Update the local store so UI reflects immediately
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const state = useDataStore.getState() as any;
+  const salesOrders = state.salesOrders || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updatedSO = salesOrders.map((o: any) =>
+    o.id === orderId ? { ...o, amountPaid } : o
+  );
+  state.setCollection("salesOrders", updatedSO);
+
+  // Also update adminOrders in local state
+  const adminOrders = state.adminOrders || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updatedAO = adminOrders.map((o: any) =>
+    o.id === orderId ? { ...o, amountPaid } : o
+  );
+  state.setCollection("adminOrders", updatedAO);
+
+  logActivity("Payment updated", "salesOrder", `Amount paid: ₹${amountPaid}`, orderId);
+}
+
+// Save payment amount for a purchase order to Firestore
+export async function savePOPayment(poId: string, amountPaid: number) {
+  if (isFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, "purchaseOrders", poId), { amountPaid });
+    } catch {
+      await setDoc(doc(db, "purchaseOrders", poId), { amountPaid }, { merge: true });
+    }
+  }
+
+  // Also update localStorage for backward compatibility
+  try {
+    const localPaymentsStr = localStorage.getItem("pc_po_payments");
+    const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
+    localPayments[poId] = amountPaid;
+    localStorage.setItem("pc_po_payments", JSON.stringify(localPayments));
+  } catch { /* ignore */ }
+
+  // Update local store
+  const purchaseOrders = useDataStore.getState().purchaseOrders;
+  const updated = purchaseOrders.map((po) =>
+    po.id === poId ? { ...po, amountPaid } : po
+  );
+  useDataStore.getState().setCollection("purchaseOrders", updated);
+
+  logActivity("PO payment updated", "purchaseOrder", `Amount paid: ₹${amountPaid}`, poId);
+}
+
 // ---- Business operations -------------------------------------------------
 
 export async function createSalesOrder(o: SalesOrder) {
@@ -298,6 +405,25 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
   if (status === "Cancelled" && !order.cancelledAt) stamp.cancelledAt = now;
   if (status === "Returned" && !order.returnedAt) stamp.returnedAt = now;
   await saveDoc("salesOrders", { ...order, status, ...stamp });
+
+  // Also update the original admin orders doc if it came from there
+  if (isFirebaseConfigured && db) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adminOrders = (useDataStore.getState() as any).adminOrders || [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const isAdminOrder = adminOrders.some((o: any) => o.id === order.id);
+    if (isAdminOrder) {
+      try {
+        await updateDoc(doc(db, "orders", order.id), {
+          status,
+          orderStatus: status,
+        });
+      } catch (err) {
+        console.warn("[setOrderStatus] Could not update orders/ doc:", err);
+      }
+    }
+  }
+
   // Returned orders restock the goods.
   if (status === "Returned" && order.status !== "Returned") {
     for (const line of order.lines) {
@@ -385,13 +511,38 @@ export async function updateOrderPricing(
 ) {
   const extraCharges = extras?.extraCharges ?? order.extraCharges ?? [];
   const totals = orderTotals(lines, extraCharges);
-  await saveDoc("salesOrders", {
+  const updatedOrder = {
     ...order,
     lines,
     ...totals,
     extraCharges,
     invoiceNote: extras?.invoiceNote ?? order.invoiceNote ?? "",
-  });
+  };
+  await saveDoc("salesOrders", updatedOrder);
+
+  // Also update the original admin orders doc if it came from there
+  if (isFirebaseConfigured && db) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adminOrders = (useDataStore.getState() as any).adminOrders || [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const isAdminOrder = adminOrders.some((o: any) => o.id === order.id);
+    if (isAdminOrder) {
+      try {
+        await updateDoc(doc(db, "orders", order.id), {
+          lines,
+          total: totals.total,
+          subtotal: totals.subtotal,
+          gstTotal: totals.gstTotal,
+          discountTotal: totals.discountTotal,
+          profit: totals.profit,
+          extraCharges,
+          invoiceNote: extras?.invoiceNote ?? order.invoiceNote ?? "",
+        });
+      } catch (err) {
+        console.warn("[updateOrderPricing] Could not update orders/ doc:", err);
+      }
+    }
+  }
 
   if (updateMaster) {
     for (const l of lines) {
@@ -439,9 +590,9 @@ export function getAppOrderById(orderId: string) {
 // Get orders for a specific customer
 export function getAppOrdersByCustomer(customerId: string) {
   const orders = getAppOrders();
-  return orders.filter((o: any) => 
-    o.userId === customerId || 
-    o.uid === customerId || 
+  return orders.filter((o: any) =>
+    o.userId === customerId ||
+    o.uid === customerId ||
     o.customerId === customerId
   );
 }
@@ -527,9 +678,9 @@ export function getAdminOrderById(orderId: string) {
 
 export function getAdminOrdersByCustomer(customerId: string) {
   const orders = getAdminOrders();
-  return orders.filter((o: any) => 
-    o.userId === customerId || 
-    o.uid === customerId || 
+  return orders.filter((o: any) =>
+    o.userId === customerId ||
+    o.uid === customerId ||
     o.customerId === customerId
   );
 }
@@ -668,7 +819,7 @@ export async function updateVariantField(
 ) {
   if (!isFirebaseConfigured || !db) return;
 
-  const payload: Record<string, unknown> =
+  const payload: Record<string, any> =
     field === "mrp"
       ? { originalPrice: value, mrp: value }
       : field === "costPrice"
@@ -693,11 +844,11 @@ export async function updateVariantField(
   const updated = (state.adminProducts || []).map((p: any) =>
     p.id === productId
       ? {
-          ...p,
-          variants: (p.variants || []).map((v: any) =>
-            v.id === variantId ? { ...v, ...payload } : v
-          ),
-        }
+        ...p,
+        variants: (p.variants || []).map((v: any) =>
+          v.id === variantId ? { ...v, ...payload } : v
+        ),
+      }
       : p
   );
   state.setCollection("adminProducts", updated);

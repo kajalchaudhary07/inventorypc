@@ -27,6 +27,8 @@ type FormValues = z.infer<typeof schema>;
 function VendorForm({ open, onClose, editing }: { open: boolean; onClose: () => void; editing: Vendor | null }) {
   const initialStatus = useMemo(() => {
     if (!editing) return "Active";
+    // Read from Firestore doc field first, then localStorage fallback
+    if (editing.status) return editing.status;
     const localStatusesStr = localStorage.getItem("pc_vendor_statuses");
     const localStatuses = localStatusesStr ? JSON.parse(localStatusesStr) : {};
     return localStatuses[editing.id] || "Active";
@@ -42,12 +44,6 @@ function VendorForm({ open, onClose, editing }: { open: boolean; onClose: () => 
   const onSubmit = async (v: FormValues) => {
     const id = editing?.id ?? uid();
     const status = v.status || "Active";
-    
-    // Save status to localStorage
-    const localStatusesStr = localStorage.getItem("pc_vendor_statuses");
-    const localStatuses = localStatusesStr ? JSON.parse(localStatusesStr) : {};
-    localStatuses[id] = status;
-    localStorage.setItem("pc_vendor_statuses", JSON.stringify(localStatuses));
 
     const vendor: Vendor = {
       id,
@@ -60,6 +56,7 @@ function VendorForm({ open, onClose, editing }: { open: boolean; onClose: () => 
       email: v.email,
       gstin: v.gstin,
       address: v.address,
+      status,
     };
     await saveDoc("vendors", vendor);
     logActivity(editing ? "Edited vendor" : "Added vendor", "vendor", vendor.name);
@@ -101,10 +98,13 @@ export default function Vendors() {
   const [filter, setFilter] = useState("all");
   const [localVersion, setLocalVersion] = useState(0);
 
-  const getVendorStatus = (vendorId: string) => {
+  const getVendorStatus = (vendor: Vendor) => {
+    // Priority 1: Firestore doc field
+    if (vendor.status) return vendor.status;
+    // Priority 2: localStorage fallback
     const localStatusesStr = typeof window !== "undefined" ? localStorage.getItem("pc_vendor_statuses") : null;
     const localStatuses = localStatusesStr ? JSON.parse(localStatusesStr) : {};
-    return localStatuses[vendorId] || "Active";
+    return localStatuses[vendor.id] || "Active";
   };
 
   const enriched = useMemo(() => {
@@ -113,10 +113,13 @@ export default function Vendors() {
 
     return vendors.map((v) => {
       const pos = purchaseOrders.filter((p) => p.vendorId === v.id && p.status !== "Cancelled");
-      const status = getVendorStatus(v.id);
+      const status = getVendorStatus(v);
       
       const totalPurchased = pos.reduce((a, p) => a + p.total, 0);
       const totalPaid = pos.reduce((a, p) => {
+        // Priority 1: Firestore-persisted field
+        if (p.amountPaid !== undefined && p.amountPaid !== null) return a + Number(p.amountPaid);
+        // Priority 2: localStorage fallback
         const paid = localPoPayments[p.id] !== undefined ? Number(localPoPayments[p.id]) : 0;
         return a + paid;
       }, 0);

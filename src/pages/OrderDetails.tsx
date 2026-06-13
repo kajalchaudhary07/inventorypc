@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useDataStore } from "@/store/dataStore";
 import { Card, PageHeader, Button } from "@/components/ui/primitives";
 import { inr, getOrderPaymentInfo } from "@/lib/utils";
+import { saveOrderPayment } from "@/services/data";
 import { ArrowLeft } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -91,21 +92,22 @@ export default function OrderDetails() {
     }
   }, [paymentInfo]);
 
-  const handleSavePayment = () => {
+  const handleSavePayment = async () => {
     if (!order) return;
     const amount = Number(editPaidAmount);
     if (isNaN(amount) || amount < 0) {
       toast.error("Please enter a valid amount");
       return;
     }
-    const localPaymentsStr = localStorage.getItem("pc_order_payments");
-    const localPayments = localPaymentsStr ? JSON.parse(localPaymentsStr) : {};
-    localPayments[order.id] = amount;
-    localStorage.setItem("pc_order_payments", JSON.stringify(localPayments));
-    
-    // Force re-evaluation of payment details
-    setLocalVersion((v) => v + 1);
-    toast.success("Payment amount updated successfully!");
+    try {
+      await saveOrderPayment(order.id, amount);
+      // Force re-evaluation of payment details
+      setLocalVersion((v) => v + 1);
+      toast.success("Payment amount updated successfully!");
+    } catch (err) {
+      console.error("Error saving payment:", err);
+      toast.error("Failed to save payment");
+    }
   };
 
   const normalizedItems = useMemo(() => {

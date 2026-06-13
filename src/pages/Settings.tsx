@@ -2,6 +2,7 @@ import toast from "react-hot-toast";
 import { Save, Receipt, Barcode, Bell, Building2 } from "lucide-react";
 import { Button, Card, Field, Input, PageHeader } from "@/components/ui/primitives";
 import { useUIStore } from "@/store/uiStore";
+import { saveSettings } from "@/services/data";
 
 function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string }) {
   return (
@@ -20,10 +21,20 @@ function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange
 export default function Settings() {
   const { settings, setSettings } = useUIStore();
 
+  const handleSave = async () => {
+    try {
+      await saveSettings(settings as any);
+      toast.success("Settings saved to cloud");
+    } catch (err) {
+      console.error("Error saving settings:", err);
+      toast.error("Failed to save settings");
+    }
+  };
+
   return (
     <div>
       <PageHeader title="Settings" subtitle="Configure GST, invoicing, barcode and notifications."
-        actions={<Button onClick={() => toast.success("Settings saved")}><Save className="h-4 w-4" /> Save</Button>} />
+        actions={<Button onClick={handleSave}><Save className="h-4 w-4" /> Save</Button>} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="p-5">

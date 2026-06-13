@@ -7,12 +7,12 @@ import { saveInventoryProduct, deleteInventoryProduct, updateProductField, updat
 import { Button, Card, PageHeader, Input } from "@/components/ui/primitives";
 import { Modal } from "@/components/ui/Modal";
 import { uid, exportCsv } from "@/lib/utils";
-import { 
-  getProductOverride, 
-  saveProductOverride, 
+import {
+  getProductOverride,
+  saveProductOverride,
   getMergedProducts,
   mergeProductWithOverrides,
-  type ProductOverride 
+  type ProductOverride
 } from "@/services/productOverrides";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -288,9 +288,9 @@ function ManualProductModal({
       });
       toast.success(editing ? "Product updated" : "Product saved");
       onClose();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Save failed:", err);
-      alert("Failed to save. Check console for details.");
+      alert(`Failed to save: ${err.message || err}`);
     } finally {
       setSaving(false);
     }
@@ -452,10 +452,10 @@ export default function AppProductsPage() {
   const inventoryProducts = useDataStore((state: any) => state.inventoryProducts || []) as AnyRecord[];
   const adminOrders = useDataStore((state: any) => state.adminOrders || []) as AnyRecord[];
   const salesOrders = useDataStore((state: any) => state.salesOrders || []) as AnyRecord[];
-  
+
   // Merge admin products with localStorage overrides
   const mergedAdminProducts = useMemo(() => getMergedProducts(adminProducts), [adminProducts]);
-  
+
   const products = activeTab === "admin" ? mergedAdminProducts : inventoryProducts;
 
   const frequencies = useMemo(() => {
@@ -473,7 +473,7 @@ export default function AppProductsPage() {
 
     const filterAndSum = (o: any) => {
       if (o.status === "Cancelled") return;
-      
+
       let orderDateMs = now;
       if (o.createdAt) {
         if (typeof o.createdAt.toDate === "function") {
@@ -601,9 +601,8 @@ export default function AppProductsPage() {
       <div className="flex gap-1 mb-4 border-b border-slate-200">
         {(["admin", "manual"] as const).map((tab) => (
           <button key={tab} onClick={() => { setActiveTab(tab); setCatFilter("all"); setStock("all"); }}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
-              activeTab === tab ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}>
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${activeTab === tab ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}>
             {tab === "admin" ? `App Products (${adminProducts.length})` : `Manual Products (${inventoryProducts.length})`}
           </button>
         ))}
