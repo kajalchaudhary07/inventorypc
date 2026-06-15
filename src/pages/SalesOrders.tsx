@@ -761,6 +761,8 @@ export default function SalesOrders() {
         cost: Number(item.cost ?? item.costPrice ?? item.cost ?? 0),
         gstRate: Number(item.gstRate ?? item.gstPercent ?? item.gst ?? 0),
         discount: Number(item.discount ?? 0),
+        mrp: item.mrp !== undefined ? Number(item.mrp) : undefined,
+        description: item.description || "",
       }));
       const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
       const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
@@ -797,6 +799,8 @@ export default function SalesOrders() {
         cost: Number(item.cost ?? item.costPrice ?? item.cost ?? 0),
         gstRate: Number(item.gstRate ?? item.gstPercent ?? item.gst ?? 0),
         discount: Number(item.discount ?? 0),
+        mrp: item.mrp !== undefined ? Number(item.mrp) : undefined,
+        description: item.description || "",
       }));
       const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
       const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);

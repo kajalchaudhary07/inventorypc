@@ -566,10 +566,26 @@ export async function updateOrderPricing(
   };
   await saveDoc("salesOrders", updatedOrder);
 
+  // Update the local store so UI reflects immediately
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const state = useDataStore.getState() as any;
+  const salesOrders = state.salesOrders || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updatedSO = salesOrders.map((o: any) =>
+    o.id === order.id ? { ...o, ...updatedOrder } : o
+  );
+  state.setCollection("salesOrders", updatedSO);
+
+  // Also update adminOrders in local state
+  const adminOrders = state.adminOrders || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updatedAO = adminOrders.map((o: any) =>
+    o.id === order.id ? { ...o, ...updatedOrder } : o
+  );
+  state.setCollection("adminOrders", updatedAO);
+
   // Also update the original admin orders doc if it came from there
   if (isFirebaseConfigured && db) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adminOrders = (useDataStore.getState() as any).adminOrders || [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const isAdminOrder = adminOrders.some((o: any) => o.id === order.id);
     if (isAdminOrder) {
@@ -583,6 +599,7 @@ export async function updateOrderPricing(
           discountTotal: totals.discountTotal,
           profit: totals.profit,
           extraCharges,
+          extraChargesTotal: totals.extraChargesTotal,
           invoiceNote: extras?.invoiceNote ?? order.invoiceNote ?? "",
         });
       } catch (err) {

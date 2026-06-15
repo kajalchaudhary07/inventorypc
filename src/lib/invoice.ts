@@ -85,6 +85,17 @@ export function buildInvoiceHtml(
     return sum + savingsPerUnit * l.qty;
   }, 0);
 
+  const computedSubtotal = order.subtotal !== undefined ? order.subtotal : order.lines.reduce((s: number, l: any) => s + (Number(l.price) || 0) * (Number(l.qty) || 0), 0);
+  const chargesRows = (order.extraCharges || [])
+    .map(
+      (c) => `
+      <div class="row">
+        <span>${esc(c.label || "Charge")}</span>
+        <span>${money(c.amount)}</span>
+      </div>`
+    )
+    .join("");
+
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Invoice ${esc(inv)}</title>
 <style>
@@ -167,12 +178,14 @@ export function buildInvoiceHtml(
   <div class="totals">
     <div class="pc">Payment Communication: ${esc(inv)}</div>
     <div class="totbox">
-      <div class="row"><span>Bill Amount</span><span>${money(paymentInfo.billAmount)}</span></div>
+      <div class="row"><span>Subtotal</span><span>${money(computedSubtotal)}</span></div>
+      ${order.discountTotal && order.discountTotal > 0 ? `<div class="row"><span>Discount</span><span>- ${money(order.discountTotal)}</span></div>` : ""}
+      ${detailFields.totalGst ? `<div class="row"><span>Total GST</span><span>${money(order.gstTotal)}</span></div>` : ""}
+      ${chargesRows}
+      <div class="row grand"><span>Total Bill</span><span>${money(order.total)}</span></div>
       ${detailFields.amountPaid ? `<div class="row"><span>Amount Paid</span><span>${money(paymentInfo.amountPaid)}</span></div>` : ""}
       ${detailFields.amountToBePaid ? `<div class="row"><span>Amount To Be Paid</span><span>${money(paymentInfo.balanceAmount)}</span></div>` : ""}
       ${detailFields.paymentStatus ? `<div class="row"><span>Payment Status</span><span><strong>${esc(paymentInfo.statusText)}</strong></span></div>` : ""}
-      ${detailFields.totalGst ? `<div class="row"><span>Total GST</span><span>${money(order.gstTotal)}</span></div>` : ""}
-      <div class="row grand"><span>Total Bill</span><span>${money(order.total)}</span></div>
       <div class="words"><span class="cap">Total amount in words:</span><br>${esc(rupeesInWords(order.total))}</div>
     </div>
   </div>
@@ -263,6 +276,11 @@ export function invoiceWhatsappText(
   const resolvedAddress = metadata?.salonAddress || "-";
   const resolvedDateTime = metadata?.placementDateTime || new Date(order.createdAt).toLocaleDateString("en-GB");
 
+  const computedSubtotal = order.subtotal !== undefined ? order.subtotal : order.lines.reduce((s: number, l: any) => s + (Number(l.price) || 0) * (Number(l.qty) || 0), 0);
+  const chargesList = (order.extraCharges || [])
+    .map((c) => `• ${c.label || "Charge"}: ${money(c.amount)}`)
+    .join("\n");
+
   return [
     `*${s.companyName}*`,
     `Invoice ${inv}`,
@@ -274,10 +292,13 @@ export function invoiceWhatsappText(
     "",
     lines,
     "",
-    `Bill Amount: ${money(paymentInfo.billAmount)}`,
+    `Subtotal: ${money(computedSubtotal)}`,
+    order.discountTotal && order.discountTotal > 0 ? `Discount: - ${money(order.discountTotal)}` : "",
+    detailFields.totalGst ? `GST Total: ${money(order.gstTotal)}` : "",
+    chargesList,
+    `*Total Bill: ${money(order.total)}*`,
     detailFields.amountPaid ? `Amount Paid: ${money(paymentInfo.amountPaid)}` : "",
     detailFields.amountToBePaid ? `Amount To Be Paid: ${money(paymentInfo.balanceAmount)}` : "",
-    detailFields.totalGst ? `GST Total: ${money(order.gstTotal)}` : "",
     detailFields.paymentStatus ? `*Payment Status: ${paymentInfo.statusText}*` : "",
     "",
     `${s.companyPhone} · ${s.companyWebsite}`,
