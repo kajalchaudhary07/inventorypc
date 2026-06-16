@@ -677,9 +677,8 @@ function QuickAddProduct({ open, onClose, defaultGst, onCreated }: { open: boole
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await saveDoc("products", p);
-    logActivity("Added product", "product", `${p.name} (from invoice)`, p.sku);
-    toast.success("Product created & added to invoice");
+    // Do not save to database to keep the product specific to this invoice only
+    toast.success("Ad-hoc product added to invoice");
     onCreated(p);
   };
 
