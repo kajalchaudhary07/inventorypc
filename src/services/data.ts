@@ -236,13 +236,34 @@ export async function saveSettings(settings: Record<string, unknown>) {
   useUIStore.getState().setSettings(settings as any);
 }
 
+// Deeply remove undefined properties from objects and arrays so Firestore doesn't throw errors
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function cleanUndefinedDeep(obj: any): any {
+  if (obj === null || obj === undefined) {
+    return null;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(cleanUndefinedDeep);
+  }
+  if (typeof obj === "object") {
+    const proto = Object.getPrototypeOf(obj);
+    if (proto === null || proto === Object.prototype) {
+      const clean: Record<string, any> = {};
+      for (const [key, val] of Object.entries(obj)) {
+        if (val !== undefined) {
+          clean[key] = cleanUndefinedDeep(val);
+        }
+      }
+      return clean;
+    }
+  }
+  return obj;
+}
+
 // Generic upsert / delete that target Firestore (live) or the in-memory store (demo).
 export async function saveDoc<T extends { id: string }>(name: CollectionName, item: T) {
   if (isFirebaseConfigured && db) {
-    // Remove undefined values - Firestore doesn't allow them
-    const cleanItem = Object.fromEntries(
-      Object.entries(item).filter(([_, value]) => value !== undefined)
-    );
+    const cleanItem = cleanUndefinedDeep(item);
     await setDoc(doc(db, name, item.id), cleanItem, { merge: true });
   } else {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -368,23 +389,6 @@ export async function savePOPayment(poId: string, amountPaid: number) {
 
 export async function createSalesOrder(o: SalesOrder) {
   await saveDoc("salesOrders", o);
-  for (const line of o.lines) {
-    const p = useDataStore.getState().products.find((x) => x.id === line.productId);
-    if (!p) continue;
-    const newStock = p.stock - line.qty;
-    await saveDoc<Product>("products", { ...p, stock: newStock, updatedAt: Date.now() });
-    await saveDoc<StockMovement>("stockMovements", {
-      id: uid(),
-      productId: p.id,
-      productName: p.name,
-      type: "out",
-      qty: -line.qty,
-      reason: "Sale",
-      refNo: o.orderNo,
-      balanceAfter: newStock,
-      createdAt: Date.now(),
-    });
-  }
   const salon = useDataStore.getState().salons.find((s) => s.id === o.salonId);
   if (salon) {
     await saveDoc("salons", {
@@ -424,26 +428,42 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
     }
   }
 
-  // Returned orders restock the goods.
-  if (status === "Returned" && order.status !== "Returned") {
+  // Handle stock transitions based on decremented status groups
+  const DECREMENTED_STATUSES = ["Delivered", "Cancelled"];
+  const wasDecremented = DECREMENTED_STATUSES.includes(order.status);
+  const isDecremented = DECREMENTED_STATUSES.includes(status);
+
+  if (isDecremented && !wasDecremented) {
+    // Transition from non-decremented to decremented -> Decrement stock
     for (const line of order.lines) {
-      const p = useDataStore.getState().products.find((x) => x.id === line.productId);
+      const [pId, vId] = line.productId.split("__");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state = useDataStore.getState() as any;
+      const adminProducts = state.adminProducts || [];
+      const inventoryProducts = state.inventoryProducts || [];
+      const p = adminProducts.find((x: any) => x.id === pId) || inventoryProducts.find((x: any) => x.id === pId);
       if (!p) continue;
-      const newStock = p.stock + line.qty;
-      await saveDoc<Product>("products", { ...p, stock: newStock, updatedAt: Date.now() });
-      await saveDoc<StockMovement>("stockMovements", {
-        id: uid(),
-        productId: p.id,
-        productName: p.name,
-        type: "return",
-        qty: line.qty,
-        reason: "Customer return",
-        refNo: order.orderNo,
-        balanceAfter: newStock,
-        createdAt: Date.now(),
-      });
+      
+      await adjustStock(p, "out", -line.qty, `Sale (Order ${order.orderNo})`, vId);
+    }
+  } else if (!isDecremented && wasDecremented) {
+    // Transition from decremented to non-decremented -> Increment stock back
+    const type: MovementType = status === "Returned" ? "return" : "in";
+    const reason = status === "Returned" ? `Customer return (Order ${order.orderNo})` : `Order reverted to ${status} (Order ${order.orderNo})`;
+    
+    for (const line of order.lines) {
+      const [pId, vId] = line.productId.split("__");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state = useDataStore.getState() as any;
+      const adminProducts = state.adminProducts || [];
+      const inventoryProducts = state.inventoryProducts || [];
+      const p = adminProducts.find((x: any) => x.id === pId) || inventoryProducts.find((x: any) => x.id === pId);
+      if (!p) continue;
+      
+      await adjustStock(p, type, line.qty, reason, vId);
     }
   }
+
   logActivity("Order status", "salesOrder", `${order.orderNo} → ${status}`, order.orderNo);
 }
 
@@ -930,8 +950,6 @@ export async function updateVariantField(
   field: string,
   value: number | string,
 ) {
-  if (!isFirebaseConfigured || !db) return;
-
   const payload: Record<string, any> =
     field === "mrp"
       ? { originalPrice: value, mrp: value }
@@ -939,17 +957,19 @@ export async function updateVariantField(
         ? { costPrice: value, cost: value }
         : { [field]: value };
 
-  try {
-    await updateDoc(doc(db, "products", productId, "variants", variantId), payload as any);
-  } catch {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = useDataStore.getState() as any;
-    const product = (state.adminProducts || []).find((p: any) => p.id === productId);
-    if (!product) return;
-    const updatedVariants = (product.variants || []).map((v: any) =>
-      v.id === variantId ? { ...v, ...payload } : v
-    );
-    await updateDoc(doc(db, "products", productId), { variants: updatedVariants });
+  if (isFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, "products", productId, "variants", variantId), payload as any);
+    } catch {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state = useDataStore.getState() as any;
+      const product = (state.adminProducts || []).find((p: any) => p.id === productId);
+      if (!product) return;
+      const updatedVariants = (product.variants || []).map((v: any) =>
+        v.id === variantId ? { ...v, ...payload } : v
+      );
+      await updateDoc(doc(db, "products", productId), { variants: updatedVariants });
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
