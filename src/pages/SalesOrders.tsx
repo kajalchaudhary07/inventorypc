@@ -101,13 +101,13 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
 
   const matches = search
     ? allProducts
-        .filter((p) => {
-          const name = (p.name || "").toLowerCase();
-          const sku = (p.sku || "").toLowerCase();
-          const q = search.trim().toLowerCase();
-          return p.status === "active" && (name.includes(q) || sku.includes(q));
-        })
-        .slice(0, 6)
+      .filter((p) => {
+        const name = (p.name || "").toLowerCase();
+        const sku = (p.sku || "").toLowerCase();
+        const q = search.trim().toLowerCase();
+        return p.status === "active" && (name.includes(q) || sku.includes(q));
+      })
+      .slice(0, 6)
     : [];
 
   const addCharge = () => setCharges((prev) => [...prev, { id: uid(), label: "", amount: 0 }]);
@@ -199,7 +199,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
                 const cid = order.salonId || (order as any).customerId || (order as any).userId || (order as any).uid || "";
                 const salonObj = salons.find((s: any) => s.id === cid);
                 const appCust = adminCustomers.find((c: any) => c.id === cid);
-                
+
                 const getField = (obj: any, keys: string[]) => {
                   for (const key of keys) {
                     if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
@@ -628,11 +628,10 @@ export default function SalesOrders() {
               <button
                 key={mode}
                 onClick={() => setDateFilter(mode)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                  dateFilter === mode
+                className={`rounded-md px-3 py-1 text-xs font-medium transition ${dateFilter === mode
                     ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
                     : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                }`}
+                  }`}
               >
                 {mode === "all" ? "All Time" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
               </button>
@@ -720,19 +719,17 @@ export default function SalesOrders() {
             <button
               key={s}
               onClick={() => setStatusTab(s)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
-                isActive
+              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${isActive
                   ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
                   : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-              }`}
+                }`}
             >
               <span>{s === "all" ? "All" : s}</span>
               <span
-                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-                  isActive
+                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive
                     ? "bg-white/20 text-white"
                     : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-                }`}
+                  }`}
               >
                 {count}
               </span>
@@ -778,7 +775,7 @@ export default function SalesOrders() {
                           const cid = o.salonId || o.customerId || o.userId || o.uid || "";
                           const salonObj = salons.find((s: any) => s.id === cid);
                           const appCust = adminCustomers.find((c: any) => c.id === cid);
-                          
+
                           const getField = (obj: any, keys: string[]) => {
                             for (const key of keys) {
                               if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
@@ -790,7 +787,7 @@ export default function SalesOrders() {
 
                           const customerName = o.salonName || getField(appCust, ["name", "customerName", "displayName", "ownerName"]) || getField(salonObj, ["ownerName", "name"]) || "-";
                           const salonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || "-";
-                          
+
                           if (salonName && salonName !== "-") {
                             return (
                               <span>
@@ -804,7 +801,7 @@ export default function SalesOrders() {
                       })()}
                     </div>
                     <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                      <StatusBadge value={o.channel} /> {o.lines.length} items · <Badge color={statusColor}>{statusText}</Badge>
+                      <StatusBadge value={o.channel} /> {(o.lines || []).length} items · <Badge color={statusColor}>{statusText}</Badge>
                     </div>
                   </div>
                   <div className="text-right flex flex-col justify-center items-end text-xs">
