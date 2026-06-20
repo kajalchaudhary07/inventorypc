@@ -236,13 +236,34 @@ export async function saveSettings(settings: Record<string, unknown>) {
   useUIStore.getState().setSettings(settings as any);
 }
 
+// Deeply remove undefined properties from objects and arrays so Firestore doesn't throw errors
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function cleanUndefinedDeep(obj: any): any {
+  if (obj === null || obj === undefined) {
+    return null;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(cleanUndefinedDeep);
+  }
+  if (typeof obj === "object") {
+    const proto = Object.getPrototypeOf(obj);
+    if (proto === null || proto === Object.prototype) {
+      const clean: Record<string, any> = {};
+      for (const [key, val] of Object.entries(obj)) {
+        if (val !== undefined) {
+          clean[key] = cleanUndefinedDeep(val);
+        }
+      }
+      return clean;
+    }
+  }
+  return obj;
+}
+
 // Generic upsert / delete that target Firestore (live) or the in-memory store (demo).
 export async function saveDoc<T extends { id: string }>(name: CollectionName, item: T) {
   if (isFirebaseConfigured && db) {
-    // Remove undefined values - Firestore doesn't allow them
-    const cleanItem = Object.fromEntries(
-      Object.entries(item).filter(([_, value]) => value !== undefined)
-    );
+    const cleanItem = cleanUndefinedDeep(item);
     await setDoc(doc(db, name, item.id), cleanItem, { merge: true });
   } else {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -368,23 +389,6 @@ export async function savePOPayment(poId: string, amountPaid: number) {
 
 export async function createSalesOrder(o: SalesOrder) {
   await saveDoc("salesOrders", o);
-  for (const line of o.lines) {
-    const p = useDataStore.getState().products.find((x) => x.id === line.productId);
-    if (!p) continue;
-    const newStock = p.stock - line.qty;
-    await saveDoc<Product>("products", { ...p, stock: newStock, updatedAt: Date.now() });
-    await saveDoc<StockMovement>("stockMovements", {
-      id: uid(),
-      productId: p.id,
-      productName: p.name,
-      type: "out",
-      qty: -line.qty,
-      reason: "Sale",
-      refNo: o.orderNo,
-      balanceAfter: newStock,
-      createdAt: Date.now(),
-    });
-  }
   const salon = useDataStore.getState().salons.find((s) => s.id === o.salonId);
   if (salon) {
     await saveDoc("salons", {
@@ -424,26 +428,42 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
     }
   }
 
-  // Returned orders restock the goods.
-  if (status === "Returned" && order.status !== "Returned") {
+  // Handle stock transitions based on decremented status groups
+  const DECREMENTED_STATUSES = ["Delivered", "Cancelled"];
+  const wasDecremented = DECREMENTED_STATUSES.includes(order.status);
+  const isDecremented = DECREMENTED_STATUSES.includes(status);
+
+  if (isDecremented && !wasDecremented) {
+    // Transition from non-decremented to decremented -> Decrement stock
     for (const line of order.lines) {
-      const p = useDataStore.getState().products.find((x) => x.id === line.productId);
+      const [pId, vId] = line.productId.split("__");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state = useDataStore.getState() as any;
+      const adminProducts = state.adminProducts || [];
+      const inventoryProducts = state.inventoryProducts || [];
+      const p = adminProducts.find((x: any) => x.id === pId) || inventoryProducts.find((x: any) => x.id === pId);
       if (!p) continue;
-      const newStock = p.stock + line.qty;
-      await saveDoc<Product>("products", { ...p, stock: newStock, updatedAt: Date.now() });
-      await saveDoc<StockMovement>("stockMovements", {
-        id: uid(),
-        productId: p.id,
-        productName: p.name,
-        type: "return",
-        qty: line.qty,
-        reason: "Customer return",
-        refNo: order.orderNo,
-        balanceAfter: newStock,
-        createdAt: Date.now(),
-      });
+      
+      await adjustStock(p, "out", -line.qty, `Sale (Order ${order.orderNo})`, vId);
+    }
+  } else if (!isDecremented && wasDecremented) {
+    // Transition from decremented to non-decremented -> Increment stock back
+    const type: MovementType = status === "Returned" ? "return" : "in";
+    const reason = status === "Returned" ? `Customer return (Order ${order.orderNo})` : `Order reverted to ${status} (Order ${order.orderNo})`;
+    
+    for (const line of order.lines) {
+      const [pId, vId] = line.productId.split("__");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state = useDataStore.getState() as any;
+      const adminProducts = state.adminProducts || [];
+      const inventoryProducts = state.inventoryProducts || [];
+      const p = adminProducts.find((x: any) => x.id === pId) || inventoryProducts.find((x: any) => x.id === pId);
+      if (!p) continue;
+      
+      await adjustStock(p, type, line.qty, reason, vId);
     }
   }
+
   logActivity("Order status", "salesOrder", `${order.orderNo} → ${status}`, order.orderNo);
 }
 
@@ -451,21 +471,46 @@ export async function adjustStock(
   product: Product,
   type: MovementType,
   signedQty: number,
-  reason: string
+  reason: string,
+  variantId?: string
 ) {
-  const newStock = product.stock + signedQty;
-  await saveDoc<Product>("products", { ...product, stock: newStock, updatedAt: Date.now() });
-  await saveDoc<StockMovement>("stockMovements", {
-    id: uid(),
-    productId: product.id,
-    productName: product.name,
-    type,
-    qty: signedQty,
-    reason,
-    balanceAfter: newStock,
-    createdAt: Date.now(),
-  });
-  logActivity("Stock adjustment", "product", `${product.sku}: ${signedQty > 0 ? "+" : ""}${signedQty} (${reason})`, product.sku);
+  if (variantId) {
+    const variants = (product as any).variants || [];
+    const variant = variants.find((v: any) => v.id === variantId);
+    if (variant) {
+      const newStock = (variant.stock ?? 0) + signedQty;
+      await updateVariantField(product.id, variantId, "stock", newStock);
+      await saveDoc<StockMovement>("stockMovements", {
+        id: uid(),
+        productId: `${product.id}__${variantId}`,
+        productName: `${product.name} - ${variant.name || variant.shadeName || variant.value || variantId}`,
+        type,
+        qty: signedQty,
+        reason,
+        balanceAfter: newStock,
+        createdAt: Date.now(),
+      });
+      logActivity("Stock adjustment", "variant", `${product.sku} (${variant.sku || variantId}): ${signedQty > 0 ? "+" : ""}${signedQty} (${reason})`, product.sku);
+    }
+  } else {
+    const newStock = (product.stock ?? 0) + signedQty;
+    if ((product as any).isInventoryOnly || (product as any).source === "manual") {
+      await saveInventoryProduct({ ...product, stock: newStock, updatedAt: Date.now() });
+    } else {
+      await saveDoc<Product>("products", { ...product, stock: newStock, updatedAt: Date.now() });
+    }
+    await saveDoc<StockMovement>("stockMovements", {
+      id: uid(),
+      productId: product.id,
+      productName: product.name,
+      type,
+      qty: signedQty,
+      reason,
+      balanceAfter: newStock,
+      createdAt: Date.now(),
+    });
+    logActivity("Stock adjustment", "product", `${product.sku}: ${signedQty > 0 ? "+" : ""}${signedQty} (${reason})`, product.sku);
+  }
 }
 
 // Receive (fully or partially) lines of a purchase order; adds stock + movements.
@@ -511,31 +556,70 @@ export async function updateOrderPricing(
 ) {
   const extraCharges = extras?.extraCharges ?? order.extraCharges ?? [];
   const totals = orderTotals(lines, extraCharges);
+  
+  const items = lines.map((l) => ({
+    productId: l.productId,
+    id: l.productId,
+    name: l.name,
+    title: l.name,
+    productName: l.name,
+    sku: l.sku,
+    qty: l.qty,
+    quantity: l.qty,
+    price: l.price,
+    unitPrice: l.price,
+    cost: l.cost,
+    costPrice: l.cost,
+    gstRate: l.gstRate,
+    gstPercent: l.gstRate,
+    gst: l.gstRate,
+    discount: l.discount,
+  }));
+
   const updatedOrder = {
     ...order,
     lines,
+    items,
     ...totals,
     extraCharges,
     invoiceNote: extras?.invoiceNote ?? order.invoiceNote ?? "",
   };
   await saveDoc("salesOrders", updatedOrder);
 
+  // Update the local store so UI reflects immediately
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const state = useDataStore.getState() as any;
+  const salesOrders = state.salesOrders || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updatedSO = salesOrders.map((o: any) =>
+    o.id === order.id ? { ...o, ...updatedOrder } : o
+  );
+  state.setCollection("salesOrders", updatedSO);
+
+  // Also update adminOrders in local state
+  const adminOrders = state.adminOrders || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updatedAO = adminOrders.map((o: any) =>
+    o.id === order.id ? { ...o, ...updatedOrder } : o
+  );
+  state.setCollection("adminOrders", updatedAO);
+
   // Also update the original admin orders doc if it came from there
   if (isFirebaseConfigured && db) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adminOrders = (useDataStore.getState() as any).adminOrders || [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const isAdminOrder = adminOrders.some((o: any) => o.id === order.id);
     if (isAdminOrder) {
       try {
         await updateDoc(doc(db, "orders", order.id), {
           lines,
+          items,
           total: totals.total,
           subtotal: totals.subtotal,
           gstTotal: totals.gstTotal,
           discountTotal: totals.discountTotal,
           profit: totals.profit,
           extraCharges,
+          extraChargesTotal: totals.extraChargesTotal,
           invoiceNote: extras?.invoiceNote ?? order.invoiceNote ?? "",
         });
       } catch (err) {
@@ -546,10 +630,59 @@ export async function updateOrderPricing(
 
   if (updateMaster) {
     for (const l of lines) {
-      const p = useDataStore.getState().products.find((x) => x.id === l.productId);
-      if (!p) continue;
-      if (p.sellingPrice !== l.price || p.costPrice !== l.cost) {
-        await saveDoc<Product>("products", { ...p, sellingPrice: l.price, costPrice: l.cost, updatedAt: Date.now() });
+      const [pId, vId] = l.productId.split("__");
+      
+      if (vId) {
+        // Variant product: update variant's price and cost
+        // Let's find the product in adminProducts
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const adminProd = ((useDataStore.getState() as any).adminProducts || []).find((x: any) => x.id === pId);
+        if (adminProd) {
+          const variant = (adminProd.variants || []).find((v: any) => v.id === vId);
+          if (variant) {
+            const variantPrice = variant.price ?? variant.sellingPrice ?? 0;
+            const variantCost = variant.costPrice ?? variant.cost ?? 0;
+            if (Number(variantPrice) !== l.price) {
+              await updateVariantField(pId, vId, "price", l.price);
+            }
+            if (Number(variantCost) !== l.cost) {
+              await updateVariantField(pId, vId, "costPrice", l.cost);
+            }
+          }
+          continue;
+        }
+
+        // Let's find the product in inventoryProducts
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const invProd = ((useDataStore.getState() as any).inventoryProducts || []).find((x: any) => x.id === pId);
+        if (invProd) {
+          const variants = invProd.variants || [];
+          const updatedVariants = variants.map((v: any) => {
+            if (v.id === vId) {
+              return { ...v, price: l.price, costPrice: l.cost, cost: l.cost, sellingPrice: l.price };
+            }
+            return v;
+          });
+          await saveInventoryProduct({ ...invProd, variants: updatedVariants, updatedAt: Date.now() });
+        }
+      } else {
+        // Simple product: update simple product's price and cost
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const adminProd = ((useDataStore.getState() as any).adminProducts || []).find((x: any) => x.id === pId);
+        if (adminProd) {
+          if (Number(adminProd.sellingPrice ?? 0) !== l.price || Number(adminProd.costPrice ?? 0) !== l.cost) {
+            await saveDoc("products", { ...adminProd, sellingPrice: l.price, costPrice: l.cost, updatedAt: Date.now() });
+          }
+          continue;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const invProd = ((useDataStore.getState() as any).inventoryProducts || []).find((x: any) => x.id === pId);
+        if (invProd) {
+          if (Number(invProd.sellingPrice ?? 0) !== l.price || Number(invProd.costPrice ?? 0) !== l.cost) {
+            await saveInventoryProduct({ ...invProd, sellingPrice: l.price, costPrice: l.cost, updatedAt: Date.now() });
+          }
+        }
       }
     }
   }
@@ -817,8 +950,6 @@ export async function updateVariantField(
   field: string,
   value: number | string,
 ) {
-  if (!isFirebaseConfigured || !db) return;
-
   const payload: Record<string, any> =
     field === "mrp"
       ? { originalPrice: value, mrp: value }
@@ -826,17 +957,19 @@ export async function updateVariantField(
         ? { costPrice: value, cost: value }
         : { [field]: value };
 
-  try {
-    await updateDoc(doc(db, "products", productId, "variants", variantId), payload as any);
-  } catch {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = useDataStore.getState() as any;
-    const product = (state.adminProducts || []).find((p: any) => p.id === productId);
-    if (!product) return;
-    const updatedVariants = (product.variants || []).map((v: any) =>
-      v.id === variantId ? { ...v, ...payload } : v
-    );
-    await updateDoc(doc(db, "products", productId), { variants: updatedVariants });
+  if (isFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, "products", productId, "variants", variantId), payload as any);
+    } catch {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state = useDataStore.getState() as any;
+      const product = (state.adminProducts || []).find((p: any) => p.id === productId);
+      if (!product) return;
+      const updatedVariants = (product.variants || []).map((v: any) =>
+        v.id === variantId ? { ...v, ...payload } : v
+      );
+      await updateDoc(doc(db, "products", productId), { variants: updatedVariants });
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

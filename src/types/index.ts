@@ -204,3 +204,14 @@ export type CollectionName =
   | "salesOrders"
   | "activityLogs"
   | "pendingProducts";
+
+export interface DetailFieldsConfig {
+  amountPaid: boolean;
+  amountToBePaid: boolean;
+  paymentStatus: boolean;
+  totalGst: boolean;
+  gstColumn: boolean;
+  source: boolean;
+  placeOfSupply: boolean;
+}
+

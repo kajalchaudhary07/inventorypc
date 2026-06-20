@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Menu, Moon, Sun, Search, LogOut, AlertTriangle, XCircle } from "lucide-react";
 import { useUIStore } from "@/store/uiStore";
@@ -12,15 +13,22 @@ export function Topbar() {
   const navigate = useNavigate();
   const { toggleSidebar, toggleTheme, theme } = useUIStore();
   const user = useAuthStore((s) => s.user);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { products: invProducts } = useDataStore();
   const adminProducts = useDataStore((s) => (s as any).adminProducts || []);
-  const mergedProducts = getMergedProducts(adminProducts);
-  const active = mergedProducts.filter((p: any) => p.status !== "archived");
-  const lowCount = active.filter((p: any) => {
-    const stock = p.stock ?? 0;
-    return stock > 0 && stock <= (p.reorderTriggerValue || p.reorderLevel || 5);
-  }).length;
-  const outCount = active.filter((p: any) => (p.stock ?? 0) === 0).length;
+  const inventoryProducts = useDataStore((s) => (s as any).inventoryProducts || []);
+
+  const products = useMemo(() => {
+    const map = new Map<string, any>();
+    (invProducts || []).forEach((p: any) => map.set(p.id, p));
+    const mergedAdmin = getMergedProducts(adminProducts);
+    mergedAdmin.forEach((p: any) => map.set(p.id, p));
+    (inventoryProducts || []).forEach((p: any) => map.set(p.id, p));
+    return Array.from(map.values());
+  }, [invProducts, adminProducts, inventoryProducts]);
+
+  const active = products.filter((p: any) => p.status !== "archived");
+  const lowCount = active.filter((p: any) => isLow(p)).length;
+  const outCount = active.filter((p: any) => isOut(p)).length;
 
   const handleSignOut = async () => {
     if (isFirebaseConfigured && auth) await signOut(auth);
@@ -32,15 +40,6 @@ export function Topbar() {
       <button onClick={toggleSidebar} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
         <Menu className="h-5 w-5" />
       </button>
-
-      <div className="relative hidden max-w-sm flex-1 sm:block">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <input
-          onFocus={() => navigate("/app-products")}
-          placeholder="Search products, orders, salons…"
-          className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-9 pr-3 text-sm outline-none focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-        />
-      </div>
 
       <div className="ml-auto flex items-center gap-2">
         {!isFirebaseConfigured && (

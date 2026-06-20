@@ -1,26 +1,49 @@
 import type { OrderLine, Product, SalesOrder, StockMovement } from "@/types";
 
-export const available = (p: Product) => p.stock - p.reserved;
+export const getProductStock = (p: any) => {
+  if (p && p.variants && p.variants.length > 0) {
+    return p.variants.reduce((sum: number, v: any) => sum + (Number(v.stock) || 0), 0);
+  }
+  return Number(p?.stock) || 0;
+};
+
+export const available = (p: Product) => getProductStock(p) - (p.reserved ?? 0);
 export const margin = (p: Product) =>
   p.sellingPrice > 0 ? ((p.sellingPrice - p.costPrice) / p.sellingPrice) * 100 : 0;
 export const profitPerUnit = (p: Product) => p.sellingPrice - p.costPrice;
-export const invValue = (p: Product) => p.stock * p.costPrice;
-export const isLow = (p: Product) => p.reorderLevel > 0 && available(p) <= p.reorderLevel;
-export const isOut = (p: Product) => available(p) <= 0;
+export const invValue = (p: Product) => {
+  if ((p as any).variants && (p as any).variants.length > 0) {
+    return (p as any).variants.reduce((sum: number, v: any) => sum + (Number(v.stock) || 0) * Number(v.costPrice ?? v.cost ?? p.costPrice ?? (p as any).cost ?? 0), 0);
+  }
+  return (p.stock ?? 0) * (p.costPrice ?? 0);
+};
+export const isLow = (p: Product) => {
+  const stock = getProductStock(p);
+  const trigger = (p as any).reorderTriggerValue || p.reorderLevel || 5;
+  return stock > 0 && stock <= trigger;
+};
+export const isOut = (p: Product) => getProductStock(p) === 0;
 
 // ---- Order line / order totals (GST-inclusive style, India) -------------
 export function lineNet(l: OrderLine) {
-  return l.price * l.qty - l.discount;
+  const price = Number(l.price) || 0;
+  const qty = Number(l.qty) || 0;
+  const discount = Number(l.discount) || 0;
+  return price * qty - discount;
 }
 export function lineGst(l: OrderLine) {
-  return (lineNet(l) * l.gstRate) / 100;
+  const gstRate = Number(l.gstRate) || 0;
+  return (lineNet(l) * gstRate) / 100;
 }
 export function lineProfit(l: OrderLine) {
-  return (l.price - l.cost) * l.qty - l.discount;
+  const price = Number(l.price) || 0;
+  const cost = Number(l.cost) || 0;
+  const qty = Number(l.qty) || 0;
+  return (price - cost) * qty;
 }
 export function orderTotals(lines: OrderLine[], extraCharges: { amount: number }[] = []) {
-  const subtotal = lines.reduce((s, l) => s + l.price * l.qty, 0);
-  const discountTotal = lines.reduce((s, l) => s + l.discount, 0);
+  const subtotal = lines.reduce((s, l) => s + (Number(l.price) || 0) * (Number(l.qty) || 0), 0);
+  const discountTotal = lines.reduce((s, l) => s + (Number(l.discount) || 0), 0);
   const gstTotal = lines.reduce((s, l) => s + lineGst(l), 0);
   const profit = lines.reduce((s, l) => s + lineProfit(l), 0);
   const extraChargesTotal = extraCharges.reduce((s, c) => s + (Number(c.amount) || 0), 0);

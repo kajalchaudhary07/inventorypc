@@ -390,23 +390,24 @@ export default function PurchaseOrders() {
         <StatCard icon={Truck} label="Vendors" value={num(stats.vendors)} />
       </div>
 
-      <div className="mb-4 mt-6 flex flex-wrap gap-2">
-        {["all", "Draft", "Sent", "Partial", "Received", "Cancelled"].map((s) => (
-          <button key={s} onClick={() => setFilter(s)} className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition ${filter === s ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900" : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"}`}>
-            {s === "all" ? "All" : s}
-          </button>
-        ))}
-      </div>
-
-      {/* Search Bar */}
-      <div className="mb-4 mt-6 relative max-w-md">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <Input
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search by Purchase Order ID or Vendor Name..."
-          className="pl-9"
-        />
+      {/* Sticky Filters & Search */}
+      <div className="sticky top-[56px] z-10 bg-white/95 dark:bg-slate-900/95 backdrop-blur -mx-4 px-4 py-3 border-b border-slate-200/50 dark:border-slate-800/50 flex flex-wrap items-center justify-between gap-3 mt-6 mb-4">
+        <div className="flex flex-wrap gap-2">
+          {["all", "Draft", "Sent", "Partial", "Received", "Cancelled"].map((s) => (
+            <button key={s} onClick={() => setFilter(s)} className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition ${filter === s ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900" : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"}`}>
+              {s === "all" ? "All" : s}
+            </button>
+          ))}
+        </div>
+        <div className="relative w-full max-w-xs">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search POs or vendors..."
+            className="pl-9"
+          />
+        </div>
       </div>
 
       <div className="space-y-3">

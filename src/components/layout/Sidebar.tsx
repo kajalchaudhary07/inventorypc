@@ -14,6 +14,7 @@ import {
   TrendingUp,
   ScrollText,
   Settings as SettingsIcon,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
@@ -39,6 +40,7 @@ const NAV = [
   { section: "Analytics & Settings" },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/business-intelligence", label: "Business Intelligence", icon: TrendingUp },
+  { to: "/bin", label: "Recycle Bin", icon: Trash2 },
   { to: "/activity", label: "Activity Logs", icon: ScrollText },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];

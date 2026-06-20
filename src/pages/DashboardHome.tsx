@@ -205,7 +205,7 @@ export default function DashboardHome() {
       .filter((o) => o.status !== "Cancelled")
       .forEach((o) => {
         const channel = (o.channel || "app").toLowerCase();
-        (o.lines || []).forEach((l) => {
+        (o.lines || []).forEach((l: any) => {
           const cur = map.get(l.productId) || {
             id: l.productId,
             name: l.name,
@@ -244,14 +244,14 @@ export default function DashboardHome() {
   }, [topProductsByChannel, searchTopProducts]);
 
   const m = useMemo(() => {
-    const active = products.filter((p) => p.status === "active");
+    const active = products.filter((p) => p.status !== "archived");
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
     const todayStart = new Date().setHours(0, 0, 0, 0);
     const valid = salesOrders.filter((o) => o.status !== "Cancelled");
     return {
       totalProducts: active.length,
       invValue: active.reduce((s, p) => s + invValue(p), 0),
-      low: active.filter((p) => isLow(p) && available(p) > 0).length,
+      low: active.filter((p) => isLow(p)).length,
       out: active.filter((p) => isOut(p)).length,
       todaySales: valid.filter((o) => o.createdAt >= todayStart).reduce((s, o) => s + o.total, 0),
       monthRevenue: valid.filter((o) => o.createdAt >= monthStart).reduce((s, o) => s + o.total, 0),
@@ -273,6 +273,8 @@ export default function DashboardHome() {
     limit: 6,
   });
   const movement = movementByDay(stockMovements, 7);
+  const lowItems = products.filter((p) => p.status !== "archived" && isLow(p)).slice(0, 6);
+  const recentPO = [...purchaseOrders].sort((a, b) => b.createdAt - a.createdAt).slice(0, 4);
   const recentOrders = [...salesOrders].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   const recentMoves = [...stockMovements].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
 
@@ -450,6 +452,36 @@ export default function DashboardHome() {
                 <span className={`font-semibold tabular-nums ${mv.qty >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
                   {mv.qty > 0 ? "+" : ""}{mv.qty}
                 </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-5">
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+            <AlertTriangle className="h-4 w-4 text-rose-500" /> Low Stock Items
+          </h3>
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {lowItems.map((p) => (
+              <div key={p.id} className="flex items-center gap-3 py-2.5 text-sm">
+                <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">{p.name}</span>
+                <span className="text-xs text-slate-400">reorder {p.reorderLevel}</span>
+                <span className="font-bold tabular-nums text-rose-600">{available(p)}</span>
+              </div>
+            ))}
+            {!lowItems.length && <p className="py-3 text-sm text-slate-400">All items above reorder level.</p>}
+          </div>
+        </Card>
+
+        <Card className="p-5">
+          <h3 className="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Recent Purchases</h3>
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {recentPO.map((po) => (
+              <div key={po.id} className="flex items-center gap-3 py-2.5 text-sm">
+                <span className="w-20 font-medium text-slate-900 dark:text-white">{po.poNo}</span>
+                <span className="min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300">{po.vendorName}</span>
+                <span className="font-semibold tabular-nums text-slate-900 dark:text-white">{inr(po.total)}</span>
+                <StatusBadge value={po.status} />
               </div>
             ))}
           </div>

@@ -18,9 +18,10 @@ interface Props<T> {
   searchPlaceholder?: string;
   pageSize?: number;
   toolbar?: React.ReactNode;
+  onRowClick?: (row: T) => void;
 }
 
-export function DataTable<T>({ data, columns, searchPlaceholder = "Search…", pageSize = 10, toolbar }: Props<T>) {
+export function DataTable<T>({ data, columns, searchPlaceholder = "Search…", pageSize = 10, toolbar, onRowClick }: Props<T>) {
   const [globalFilter, setGlobalFilter] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
 
@@ -35,11 +36,30 @@ export function DataTable<T>({ data, columns, searchPlaceholder = "Search…", p
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     initialState: { pagination: { pageSize } },
+    globalFilterFn: (row, _columnId, filterValue) => {
+      const q = String(filterValue).trim().toLowerCase();
+      if (!q) return true;
+      const searchObj = (obj: any): boolean => {
+        if (obj == null) return false;
+        if (typeof obj === "string" || typeof obj === "number" || typeof obj === "boolean") {
+          return String(obj).toLowerCase().includes(q);
+        }
+        if (Array.isArray(obj)) {
+          return obj.some(searchObj);
+        }
+        if (typeof obj === "object") {
+          if (obj.$$typeof) return false;
+          return Object.values(obj).some(searchObj);
+        }
+        return false;
+      };
+      return searchObj(row.original);
+    }
   });
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="sticky top-[56px] z-10 -mx-4 px-4 bg-white/95 py-3 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200/50 dark:border-slate-800/50 flex flex-wrap items-center justify-between gap-3">
         <div className="relative w-full max-w-xs">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <Input
@@ -61,7 +81,7 @@ export function DataTable<T>({ data, columns, searchPlaceholder = "Search…", p
                   <th key={h.id} className="px-4 py-3 font-semibold">
                     {h.isPlaceholder ? null : (
                       <button
-                        className={`inline-flex items-center gap-1 ${h.column.getCanSort() ? "cursor-pointer select-none" : ""}`}
+                         className={`inline-flex items-center gap-1 ${h.column.getCanSort() ? "cursor-pointer select-none" : ""}`}
                         onClick={h.column.getToggleSortingHandler()}
                       >
                         {flexRender(h.column.columnDef.header, h.getContext())}
@@ -75,7 +95,19 @@ export function DataTable<T>({ data, columns, searchPlaceholder = "Search…", p
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className="bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800/50">
+              <tr 
+                key={row.id} 
+                className={`bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800/50 ${onRowClick ? "cursor-pointer" : ""}`}
+                onClick={(e) => {
+                  if (onRowClick) {
+                    const target = e.target as HTMLElement;
+                    if (target.closest("button") || target.closest("input") || target.closest("select") || target.closest("a") || target.closest("[role='button']")) {
+                      return;
+                    }
+                    onRowClick(row.original);
+                  }
+                }}
+              >
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id} className="px-4 py-3 text-slate-700 dark:text-slate-200">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}

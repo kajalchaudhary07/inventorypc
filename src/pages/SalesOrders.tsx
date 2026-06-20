@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import toast from "react-hot-toast";
 import { Plus, FileText, Printer, Pencil, Save, X, MessageCircle, Trash2, Search, PackagePlus, Bell, Copy, Truck, Eye } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -7,13 +7,14 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
 import { useUIStore } from "@/store/uiStore";
-import { setOrderStatus, updateOrderPricing, saveDoc, logActivity } from "@/services/data";
+import { setOrderStatus, updateOrderPricing, saveDoc, logActivity, saveOrderPayment } from "@/services/data";
+import { deleteToBin } from "@/services/recycleBin";
 import { inr, fmtDateTime, uid, getOrderPaymentInfo } from "@/lib/utils";
 import { lineGst, lineNet, orderTotals } from "@/lib/calc";
 import { printInvoice, shareInvoiceWhatsapp } from "@/lib/invoice";
 import { paymentReminderDraft, orderUpdateDraft, shareTextWhatsapp } from "@/lib/messages";
 import { getMergedProducts } from "@/services/productOverrides";
-import type { ExtraCharge, OrderLine, Product, SalesOrder, SalesStatus } from "@/types";
+import type { ExtraCharge, OrderLine, Product, SalesOrder, SalesStatus, DetailFieldsConfig } from "@/types";
 
 const STATUSES: SalesStatus[] = ["Pending", "Packed", "Delivered", "Cancelled", "Returned"];
 
@@ -39,19 +40,84 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
   const [quickAdd, setQuickAdd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [variantPickerProduct, setVariantPickerProduct] = useState<any | null>(null);
+  const [detailFields, setDetailFields] = useState<DetailFieldsConfig>({
+    amountPaid: false,
+    amountToBePaid: false,
+    paymentStatus: false,
+    totalGst: false,
+    gstColumn: false,
+    source: false,
+    placeOfSupply: false,
+  });
+
+  const prevOrderIdRef = useRef<string | null>(null);
 
   // Reset the working copy whenever a different order opens.
   useEffect(() => {
-    setLines(order ? order.lines.map((l) => ({ ...l })) : []);
-    setCharges(order?.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : []);
-    setNote(order?.invoiceNote ?? "");
-    setEditing(false);
-    setAskSave(false);
-    setSaving(false);
-    setSearch("");
-    setQuickAdd(false);
-    setVariantPickerProduct(null);
-  }, [order]);
+    if (!order) {
+      setLines([]);
+      setCharges([]);
+      setNote("");
+      setEditing(false);
+      setAskSave(false);
+      setSaving(false);
+      setSearch("");
+      setQuickAdd(false);
+      setVariantPickerProduct(null);
+      setDetailFields({
+        amountPaid: false,
+        amountToBePaid: false,
+        paymentStatus: false,
+        totalGst: false,
+        gstColumn: false,
+        source: false,
+        placeOfSupply: false,
+      });
+      prevOrderIdRef.current = null;
+      return;
+    }
+
+    if (prevOrderIdRef.current !== order.id) {
+      prevOrderIdRef.current = order.id;
+
+      setLines(order.lines.map((l) => {
+        let mrp = (l as any).mrp;
+        if (mrp === undefined || mrp === 0) {
+          const [pId, vId] = l.productId.split("__");
+          const prod = allProducts.find((p) => p.id === pId);
+          if (prod) {
+            if (vId && prod.variants) {
+              const variant = prod.variants.find((v: any) => v.id === vId);
+              mrp = variant ? (variant.originalPrice ?? variant.mrp) : (prod.originalPrice ?? prod.mrp);
+            } else {
+              mrp = prod.originalPrice ?? prod.mrp;
+            }
+          }
+        }
+        return {
+          ...l,
+          mrp: Number(mrp ?? l.price)
+        };
+      }));
+      setCharges(order.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : []);
+      setNote(order.invoiceNote ?? "");
+      setEditing(false);
+      setAskSave(false);
+      setSaving(false);
+      setSearch("");
+      setQuickAdd(false);
+      setVariantPickerProduct(null);
+      setDetailFields({
+        amountPaid: false,
+        amountToBePaid: false,
+        paymentStatus: false,
+        totalGst: false,
+        gstColumn: false,
+        source: false,
+        placeOfSupply: false,
+      });
+    }
+  }, [order, allProducts]);
 
   if (!order) return null;
 
@@ -63,7 +129,20 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
 
   // Edit by index (lines can repeat a productId or be newly added).
   const setLineAt = (i: number, patch: Partial<OrderLine>) =>
-    setLines((prev) => prev.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+    setLines((prev) =>
+      prev.map((l, j) => {
+        if (j === i) {
+          const next = { ...l, ...patch };
+          if (patch.qty !== undefined) next.qty = isNaN(Number(patch.qty)) ? 0 : Number(patch.qty);
+          if (patch.price !== undefined) next.price = isNaN(Number(patch.price)) ? 0 : Number(patch.price);
+          if (patch.cost !== undefined) next.cost = isNaN(Number(patch.cost)) ? 0 : Number(patch.cost);
+          if (patch.discount !== undefined) next.discount = isNaN(Number(patch.discount)) ? 0 : Number(patch.discount);
+          if (patch.gstRate !== undefined) next.gstRate = isNaN(Number(patch.gstRate)) ? 0 : Number(patch.gstRate);
+          return next;
+        }
+        return l;
+      })
+    );
   const removeLineAt = (i: number) => setLines((prev) => prev.filter((_, j) => j !== i));
 
   const addProductLine = (p: any, v?: any) => {
@@ -73,6 +152,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     const price = Number(v?.price ?? p.sellingPrice ?? p.price ?? 0);
     const cost = Number(v?.costPrice ?? v?.cost ?? p.costPrice ?? 0);
     const gstRate = Number(v?.gstRate ?? p.gstRate ?? 18);
+    const mrp = Number(v?.originalPrice ?? v?.mrp ?? p.originalPrice ?? p.mrp ?? price);
 
     setLines((prev) => [
       ...prev,
@@ -85,6 +165,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         cost,
         gstRate,
         discount: 0,
+        mrp,
       },
     ]);
     setSearch("");
@@ -116,7 +197,25 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
   const removeChargeAt = (i: number) => setCharges((prev) => prev.filter((_, j) => j !== i));
 
   const cancelEdit = () => {
-    setLines(order.lines.map((l) => ({ ...l })));
+    setLines(order.lines.map((l) => {
+      let mrp = (l as any).mrp;
+      if (mrp === undefined || mrp === 0) {
+        const [pId, vId] = l.productId.split("__");
+        const prod = allProducts.find((p) => p.id === pId);
+        if (prod) {
+          if (vId && prod.variants) {
+            const variant = prod.variants.find((v: any) => v.id === vId);
+            mrp = variant ? (variant.originalPrice ?? variant.mrp) : (prod.originalPrice ?? prod.mrp);
+          } else {
+            mrp = prod.originalPrice ?? prod.mrp;
+          }
+        }
+      }
+      return {
+        ...l,
+        mrp: Number(mrp ?? l.price)
+      };
+    }));
     setCharges(order.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : []);
     setNote(order.invoiceNote ?? "");
     setEditing(false);
@@ -134,12 +233,69 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     } catch (err) {
       console.error("applySave error:", err);
       toast.error("Failed to save invoice changes. Please try again.");
-      // Close the confirmation sub-dialog so the user can retry via Save Changes
       setAskSave(false);
     } finally {
       setSaving(false);
     }
   };
+
+  // Resolve metadata
+  const getField = (obj: any, keys: string[]) => {
+    for (const key of keys) {
+      if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
+        return obj[key];
+      }
+    }
+    return "";
+  };
+
+  const cid = order.salonId || order.customerId || order.userId || order.uid || "";
+  const salonObj = salons.find((s: any) => s.id === cid);
+  const appCust = adminCustomers.find((c: any) => c.id === cid);
+
+  const ownerName = getField(salonObj, ["ownerName"]) || getField(appCust, ["ownerName", "name", "customerName", "displayName"]) || "-";
+  const salonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || order.salonName || "-";
+  
+  let salonAddress = getField(salonObj, ["address"]) || getField(appCust, ["address"]) || "";
+  if (!salonAddress) {
+    const d = (order as any).deliveryAddress || (order as any).address || (order as any).shippingAddress || (order as any).customer?.address;
+    if (d) {
+      if (typeof d === "string") {
+        salonAddress = d;
+      } else {
+        salonAddress = [d.line1, d.line2, d.landmark, d.city, d.state, d.postalCode || d.zip || d.pincode]
+          .map((x: any) => String(x || "").trim())
+          .filter(Boolean)
+          .join(", ");
+      }
+    }
+  }
+  if (!salonAddress) salonAddress = "-";
+
+  const formatExactDateTime = (ts: number) => {
+    const dt = new Date(ts);
+    const day = String(dt.getDate()).padStart(2, '0');
+    const month = String(dt.getMonth() + 1).padStart(2, '0');
+    const year = dt.getFullYear();
+    const hours = String(dt.getHours()).padStart(2, '0');
+    const minutes = String(dt.getMinutes()).padStart(2, '0');
+    return `${day}/${month}/${year} ${hours}:${minutes}`;
+  };
+  const placementDateTime = formatExactDateTime(order.createdAt);
+
+  const metadata = {
+    ownerName,
+    salonName,
+    salonAddress,
+    placementDateTime,
+  };
+
+  // Calculate savings
+  const savings = lines.reduce((sum, l) => {
+    const mrp = Number((l as any).mrp ?? l.price);
+    const savingsPerUnit = Math.max(0, mrp - l.price);
+    return sum + savingsPerUnit * l.qty;
+  }, 0);
 
   // Working order used for print / WhatsApp so unsaved edits are reflected.
   const workingOrder: SalesOrder = { ...order, lines, extraCharges: charges, invoiceNote: note, ...totals };
@@ -161,7 +317,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         editing ? (
           <>
             <Button variant="secondary" onClick={cancelEdit}><X className="h-4 w-4" /> Cancel</Button>
-            <Button variant="secondary" onClick={() => shareInvoiceWhatsapp(workingOrder, settings, salonPhone)}>
+            <Button variant="secondary" onClick={() => shareInvoiceWhatsapp(workingOrder, settings, salonPhone, detailFields, metadata)}>
               <MessageCircle className="h-4 w-4" /> WhatsApp
             </Button>
             <Button onClick={() => (dirty ? setAskSave(true) : setEditing(false))} disabled={!dirty}>
@@ -172,15 +328,85 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
           <>
             <Button variant="secondary" onClick={() => setEditing(true)}><Pencil className="h-4 w-4" /> Edit invoice</Button>
             <Button variant="secondary" onClick={onClose}>Close</Button>
-            <Button variant="secondary" onClick={() => shareInvoiceWhatsapp(workingOrder, settings, salonPhone)}>
+            <Button variant="secondary" onClick={() => shareInvoiceWhatsapp(workingOrder, settings, salonPhone, detailFields, metadata)}>
               <MessageCircle className="h-4 w-4" /> WhatsApp
             </Button>
-            <Button onClick={() => printInvoice(workingOrder, settings)}><Printer className="h-4 w-4" /> Print / PDF</Button>
+            <Button onClick={() => printInvoice(workingOrder, settings, detailFields, metadata)}><Printer className="h-4 w-4" /> Print / PDF</Button>
           </>
         )
       }
     >
       <div className="space-y-4 text-sm">
+        {/* Toggle checkboxes for detailed fields */}
+        <div className="border-b border-slate-200 pb-4 dark:border-slate-800 space-y-2">
+          <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Show / Hide Fields</div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={detailFields.amountPaid}
+                onChange={(e) => setDetailFields((prev) => ({ ...prev, amountPaid: e.target.checked }))}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+              />
+              <span>Amount Paid</span>
+            </label>
+            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={detailFields.amountToBePaid}
+                onChange={(e) => setDetailFields((prev) => ({ ...prev, amountToBePaid: e.target.checked }))}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+              />
+              <span>Amount To Be Paid</span>
+            </label>
+            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={detailFields.paymentStatus}
+                onChange={(e) => setDetailFields((prev) => ({ ...prev, paymentStatus: e.target.checked }))}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+              />
+              <span>Payment Status</span>
+            </label>
+            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={detailFields.totalGst}
+                onChange={(e) => setDetailFields((prev) => ({ ...prev, totalGst: e.target.checked }))}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+              />
+              <span>Total GST</span>
+            </label>
+            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={detailFields.gstColumn}
+                onChange={(e) => setDetailFields((prev) => ({ ...prev, gstColumn: e.target.checked }))}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+              />
+              <span>GST Column</span>
+            </label>
+            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={detailFields.source}
+                onChange={(e) => setDetailFields((prev) => ({ ...prev, source: e.target.checked }))}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+              />
+              <span>Source</span>
+            </label>
+            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={detailFields.placeOfSupply}
+                onChange={(e) => setDetailFields((prev) => ({ ...prev, placeOfSupply: e.target.checked }))}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+              />
+              <span>Place of Supply</span>
+            </label>
+          </div>
+        </div>
+
         <div className="flex items-start justify-between">
           <div>
             <div className="text-base font-bold text-slate-900 dark:text-white">{settings.companyName}</div>
@@ -188,40 +414,29 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
           </div>
           <div className="text-right text-xs text-slate-500">
             <div>{settings.invoicePrefix}{order.orderNo}</div>
-            <div>{fmtDateTime(order.createdAt)}</div>
+            <div>Order Placed: {metadata.placementDateTime}</div>
           </div>
         </div>
-        <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800">
-          <div className="font-medium text-slate-900 dark:text-white">
-            {(() => {
-              const isPcOrder = (order.orderNo || "").startsWith("PC-") || (order.id || "").startsWith("PC-");
-              if (isPcOrder) {
-                const cid = order.salonId || (order as any).customerId || (order as any).userId || (order as any).uid || "";
-                const salonObj = salons.find((s: any) => s.id === cid);
-                const appCust = adminCustomers.find((c: any) => c.id === cid);
-
-                const getField = (obj: any, keys: string[]) => {
-                  for (const key of keys) {
-                    if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
-                      return obj[key];
-                    }
-                  }
-                  return "";
-                };
-
-                const customerName = order.salonName || getField(appCust, ["name", "customerName", "displayName", "ownerName"]) || getField(salonObj, ["ownerName", "name"]) || "-";
-                const salonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || "-";
-                if (salonName && salonName !== "-") {
-                  return `${salonName} (${customerName})`;
-                }
-                return customerName;
-              }
-              return order.salonName;
-            })()}
-          </div>
-          <div className="text-xs text-slate-400">
-            Channel: {order.channel} · Payment: <span className={`font-semibold ${paymentStatusColorClass}`}>{statusText}</span>
-          </div>
+        <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800 space-y-1">
+          <div className="font-semibold text-slate-900 dark:text-white">Salon: {metadata.salonName}</div>
+          <div className="text-xs text-slate-600 dark:text-slate-300">Owner: {metadata.ownerName}</div>
+          <div className="text-xs text-slate-600 dark:text-slate-300">Address: {metadata.salonAddress}</div>
+          {detailFields.placeOfSupply && (
+            <div className="text-xs text-slate-600 dark:text-slate-300">
+              Place of Supply: {settings.companyState.split(",")[0] || "Maharashtra"}
+            </div>
+          )}
+          {(detailFields.source || detailFields.paymentStatus) && (
+            <div className="text-xs text-slate-400 mt-1 border-t border-slate-200/50 dark:border-slate-700/50 pt-1">
+              {detailFields.source && <span>Channel: {order.channel}</span>}
+              {detailFields.source && detailFields.paymentStatus && <span> · </span>}
+              {detailFields.paymentStatus && (
+                <span>
+                  Payment: <span className={`font-semibold ${paymentStatusColorClass}`}>{statusText}</span>
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {editing && (
@@ -246,7 +461,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
                   <Labeled label="Disc"><Input type="number" step="0.01" min={0} value={l.discount} onChange={(e) => setLineAt(i, { discount: Number(e.target.value) })} /></Labeled>
                   <Labeled label="GST %"><Input type="number" step="0.01" min={0} value={l.gstRate} onChange={(e) => setLineAt(i, { gstRate: Number(e.target.value) })} /></Labeled>
                 </div>
-                <div className="mt-1.5 text-right text-xs text-slate-500">Amount: <span className="font-medium tabular-nums text-slate-700 dark:text-slate-200">{inr(lineNet(l) + lineGst(l))}</span></div>
+                <div className="mt-1.5 text-right text-xs text-slate-500">Amount: <span className="font-medium tabular-nums text-slate-700 dark:text-slate-200">{inr(lineNet(l) + (detailFields.gstColumn ? lineGst(l) : 0))}</span></div>
               </div>
             ))}
 
@@ -298,7 +513,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
                 <th className="py-2 text-right">SP</th>
                 <th className="py-2 text-right">Cost</th>
                 <th className="py-2 text-right">Margin/Profit</th>
-                <th className="py-2 text-right">GST %</th>
+                {detailFields.gstColumn && <th className="py-2 text-right">GST %</th>}
                 <th className="py-2 text-right">Amount</th>
               </tr>
             </thead>
@@ -306,9 +521,10 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
               {lines.map((l, i) => {
                 const cost = Number(l.cost ?? 0);
                 const hasCost = cost > 0;
-                const marginVal = hasCost ? (l.price - cost) * l.qty - l.discount : 0;
+                // Calculate profit using formula (price - cost) * qty
+                const profitVal = (l.price - cost) * l.qty;
                 const displayCost = hasCost ? inr(cost) : "—";
-                const displayMargin = hasCost ? inr(marginVal) : "—";
+                const displayProfit = hasCost ? inr(profitVal) : "—";
                 return (
                   <tr key={i} className="border-b border-slate-100 dark:border-slate-800">
                     <td className="py-2 text-slate-700 dark:text-slate-200">
@@ -318,9 +534,9 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
                     <td className="py-2 text-right tabular-nums">{l.qty}</td>
                     <td className="py-2 text-right tabular-nums">{inr(l.price)}</td>
                     <td className="py-2 text-right tabular-nums">{displayCost}</td>
-                    <td className="py-2 text-right tabular-nums">{displayMargin}</td>
-                    <td className="py-2 text-right tabular-nums">{l.gstRate}%</td>
-                    <td className="py-2 text-right font-medium tabular-nums">{inr(lineNet(l) + lineGst(l))}</td>
+                    <td className="py-2 text-right tabular-nums">{displayProfit}</td>
+                    {detailFields.gstColumn && <td className="py-2 text-right tabular-nums">{l.gstRate}%</td>}
+                    <td className="py-2 text-right font-medium tabular-nums">{inr(lineNet(l) + (detailFields.gstColumn ? lineGst(l) : 0))}</td>
                   </tr>
                 );
               })}
@@ -334,17 +550,27 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
           {charges.map((c) => (
             <Line key={c.id} k={c.label || "Charge"} v={inr(c.amount)} />
           ))}
-          <Line k="Total GST" v={inr(totals.gstTotal)} />
+          {detailFields.totalGst && <Line k="Total GST" v={inr(totals.gstTotal)} />}
           <div className="border-t border-slate-200 my-1 pt-1 dark:border-slate-700"></div>
           <Line k="Bill Amount" v={inr(totals.total)} bold />
-          <Line k="Amount Paid" v={inr(amountPaid)} />
-          <Line k="Amount To Be Paid" v={inr(balanceAmount)} />
-          <div className="flex justify-between text-sm text-slate-500 py-1">
-            <span>Payment Status</span>
-            <Badge color={statusColor}>{statusText}</Badge>
-          </div>
+          {detailFields.amountPaid && <Line k="Amount Paid" v={inr(amountPaid)} />}
+          {detailFields.amountToBePaid && <Line k="Amount To Be Paid" v={inr(balanceAmount)} />}
+          {detailFields.paymentStatus && (
+            <div className="flex justify-between text-sm text-slate-500 py-1">
+              <span>Payment Status</span>
+              <Badge color={statusColor}>{statusText}</Badge>
+            </div>
+          )}
           <Line k="Total Profit/Margin" v={inr(totals.profit)} />
         </div>
+
+        {savings > 0 && (
+          <div className="mt-4 rounded-xl border-2 border-dashed border-emerald-500 bg-emerald-50/50 p-4 text-center dark:bg-emerald-950/20">
+            <span className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
+              🎉 You saved {inr(savings)} on this order!
+            </span>
+          </div>
+        )}
 
         {!editing && note && (
           <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-800">{note}</div>
@@ -450,9 +676,8 @@ function QuickAddProduct({ open, onClose, defaultGst, onCreated }: { open: boole
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await saveDoc("products", p);
-    logActivity("Added product", "product", `${p.name} (from invoice)`, p.sku);
-    toast.success("Product created & added to invoice");
+    // Do not save to database to keep the product specific to this invoice only
+    toast.success("Ad-hoc product added to invoice");
     onCreated(p);
   };
 
@@ -496,63 +721,144 @@ export default function SalesOrders() {
   // Merge admin orders and inventory salesOrders. Prefer inventory-specific (salesOrders) when ids collide.
   const orders = useMemo(() => {
     const map = new Map<string, any>();
+    
+    const getField = (obj: any, keys: string[]) => {
+      for (const key of keys) {
+        if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
+          return obj[key];
+        }
+      }
+      return "";
+    };
+
+    const resolveOrderNames = (o: any) => {
+      const cid = o.salonId || o.customerId || o.userId || o.uid || "";
+      const salonObj = salons.find((x: any) => x.id === cid);
+      const appCust = adminCustomers.find((x: any) => x.id === cid);
+      
+      const ownerName = getField(salonObj, ["ownerName"]) || getField(appCust, ["ownerName", "name", "customerName", "displayName"]) || "";
+      const resolvedSalonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || o.salonName || o.customerName || "";
+      const customerName = o.salonName || getField(appCust, ["name", "customerName", "displayName", "ownerName"]) || getField(salonObj, ["ownerName", "name"]) || resolvedSalonName || "";
+      
+      return {
+        ownerName,
+        resolvedSalonName,
+        customerName
+      };
+    };
+
     // add inventory sales orders first (they take precedence)
-    (salesOrders || []).forEach((o: any) => map.set(o.id, o));
-    // add admin orders normalized so existing UI works
-    (adminOrders || []).forEach((o: any) => {
-      if (map.has(o.id)) return;
+    (salesOrders || []).forEach((o: any) => {
       const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
-      const normalized = {
-        // keep raw doc for detail page
+      const lines = rawItems.map((item: any) => ({
+        productId: item.productId || item.id || "",
+        name: item.name || item.title || item.productName || "",
+        sku: item.sku || item.productId || "",
+        qty: Number(item.quantity ?? item.qty ?? 1) || 1,
+        price: Number(item.price ?? item.unitPrice ?? 0),
+        cost: Number(item.cost ?? item.costPrice ?? item.cost ?? 0),
+        gstRate: Number(item.gstRate ?? item.gstPercent ?? item.gst ?? 0),
+        discount: Number(item.discount ?? 0),
+        mrp: item.mrp !== undefined ? Number(item.mrp) : undefined,
+        description: item.description || "",
+      }));
+      const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
+      const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
+      
+      map.set(o.id, {
         ...o,
         id: o.id,
         orderNo: o.orderNo || o.orderId || o.code || o.number || o.id,
-        salonName:
-          o.salonName ||
-          o.contactDetails?.receiverName ||
-          o.receiverName ||
-          o.customerName ||
-          o.customer?.name ||
-          o.userName ||
-          o.userId ||
-          "-",
+        salonName: resolvedSalonName || o.salonName || "-",
         salonId: o.salonId || o.customerId || o.userId || o.uid || null,
-        lines: rawItems.map((item: any) => ({
-          productId: item.productId || item.id || "",
-          name: item.name || item.title || item.productName || "",
-          sku: item.sku || item.productId || "",
-          qty: Number(item.quantity ?? item.qty ?? 1) || 1,
-          price: Number(item.price ?? item.unitPrice ?? 0),
-          cost: Number(item.cost ?? 0),
-          gstRate: Number(item.gstRate ?? 0),
-          discount: Number(item.discount ?? 0),
-        })),
+        lines,
         total: Number(o.total ?? o.amount ?? o.totalAmount ?? o.grandTotal ?? o.payableAmount ?? 0),
-        profit: Number(o.profit ?? 0),
+        profit,
         createdAt: toMs(o.createdAt || o.orderDate || o.date),
         status: o.status || o.orderStatus || "Pending",
         channel: o.channel || o.source || "app",
         paymentStatus: o.paymentStatus || o.payment_status || "Pending",
         expectedDelivery: o.expectedDelivery,
+        ownerName,
+        resolvedSalonName,
+        customerName
+      });
+    });
+    // add admin orders normalized so existing UI works
+    (adminOrders || []).forEach((o: any) => {
+      if (map.has(o.id)) return;
+      const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
+      const lines = rawItems.map((item: any) => ({
+        productId: item.productId || item.id || "",
+        name: item.name || item.title || item.productName || "",
+        sku: item.sku || item.productId || "",
+        qty: Number(item.quantity ?? item.qty ?? 1) || 1,
+        price: Number(item.price ?? item.unitPrice ?? 0),
+        cost: Number(item.cost ?? item.costPrice ?? item.cost ?? 0),
+        gstRate: Number(item.gstRate ?? item.gstPercent ?? item.gst ?? 0),
+        discount: Number(item.discount ?? 0),
+        mrp: item.mrp !== undefined ? Number(item.mrp) : undefined,
+        description: item.description || "",
+      }));
+      const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
+      const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
+      const rawSalonName =
+        o.salonName ||
+        o.contactDetails?.receiverName ||
+        o.receiverName ||
+        o.customerName ||
+        o.customer?.name ||
+        o.userName ||
+        o.userId ||
+        "-";
+      const finalSalonName = resolvedSalonName || rawSalonName;
+      
+      const normalized = {
+        // keep raw doc for detail page
+        ...o,
+        id: o.id,
+        orderNo: o.orderNo || o.orderId || o.code || o.number || o.id,
+        salonName: finalSalonName,
+        salonId: o.salonId || o.customerId || o.userId || o.uid || null,
+        lines,
+        total: Number(o.total ?? o.amount ?? o.totalAmount ?? o.grandTotal ?? o.payableAmount ?? 0),
+        profit,
+        createdAt: toMs(o.createdAt || o.orderDate || o.date),
+        status: o.status || o.orderStatus || "Pending",
+        channel: o.channel || o.source || "app",
+        paymentStatus: o.paymentStatus || o.payment_status || "Pending",
+        expectedDelivery: o.expectedDelivery,
+        ownerName,
+        resolvedSalonName: finalSalonName,
+        customerName: customerName || rawSalonName
       };
       map.set(o.id, normalized);
     });
     return Array.from(map.values());
-  }, [adminOrders, salesOrders]);
+  }, [adminOrders, salesOrders, salons, adminCustomers]);
+
   const [statusTab, setStatusTab] = useState("all");
   const [channel, setChannel] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState<"all" | "Paid" | "Unpaid" | "Partial">("all");
   const [invoice, setInvoice] = useState<SalesOrder | null>(null);
   const [notify, setNotify] = useState<SalesOrder | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-
-  const [dateFilter, setDateFilter] = useState<"all" | "week" | "month" | "custom">("all");
+ 
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("all");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
-
+ 
   const dateFilteredOrders = useMemo(() => {
     return orders.filter((o) => {
       if (dateFilter === "all") return true;
       const ts = o.createdAt;
+      if (dateFilter === "today") {
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        const endOfToday = new Date();
+        endOfToday.setHours(23, 59, 59, 999);
+        return ts >= startOfToday.getTime() && ts <= endOfToday.getTime();
+      }
       if (dateFilter === "week") {
         return ts >= Date.now() - 7 * 86400000;
       }
@@ -567,7 +873,7 @@ export default function SalesOrders() {
       return true;
     });
   }, [orders, dateFilter, customStart, customEnd]);
-
+ 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: dateFilteredOrders.length };
     STATUSES.forEach((s) => {
@@ -575,33 +881,60 @@ export default function SalesOrders() {
     });
     return c;
   }, [dateFilteredOrders]);
-
+ 
   const rows = dateFilteredOrders
-    .filter((o) => (statusTab === "all" || o.status === statusTab) && (channel === "all" || o.channel === channel))
+    .filter((o) => {
+      if (statusTab !== "all" && o.status !== statusTab) return false;
+      if (channel !== "all" && o.channel !== channel) return false;
+      if (paymentFilter !== "all") {
+        const { statusText } = getOrderPaymentInfo(o);
+        const normalizedPayment = statusText === "Partial Paid" ? "Partial" : statusText;
+        if (normalizedPayment !== paymentFilter) return false;
+      }
+      return true;
+    })
     .filter((o) => {
       const q = searchQuery.trim().toLowerCase();
       if (!q) return true;
       return (
         (o.orderNo || "").toLowerCase().includes(q) ||
         (o.id || "").toLowerCase().includes(q) ||
-        (o.salonName || "").toLowerCase().includes(q)
+        (o.salonName || "").toLowerCase().includes(q) ||
+        (o.resolvedSalonName || "").toLowerCase().includes(q) ||
+        (o.customerName || "").toLowerCase().includes(q) ||
+        (o.ownerName || "").toLowerCase().includes(q)
       );
     })
     .sort((a, b) => b.createdAt - a.createdAt);
-
-  const { statTotalOrders, statRevenue, statProfit, statPending } = useMemo(() => {
+ 
+  const { statTotalOrders, statRevenue, statProfit } = useMemo(() => {
     const totalOrders = dateFilteredOrders.length;
-    const delivered = dateFilteredOrders.filter((o) => o.status === "Delivered");
-    const revenue = delivered.reduce((sum, o) => sum + o.total, 0);
-    const profit = delivered.reduce((sum, o) => sum + o.profit, 0);
-    const pending = dateFilteredOrders.filter((o) => o.status === "Pending").length;
+    const eligibleOrders = dateFilteredOrders.filter((o) => {
+      const { statusText } = getOrderPaymentInfo(o);
+      return statusText === "Paid";
+    });
+    const revenue = eligibleOrders.reduce((sum, o) => sum + o.total, 0);
+    const profit = eligibleOrders.reduce((sum, o) => sum + o.profit, 0);
     return {
       statTotalOrders: totalOrders,
       statRevenue: revenue,
       statProfit: profit,
-      statPending: pending,
     };
   }, [dateFilteredOrders]);
+
+  const handlePaymentToggle = async (e: React.MouseEvent, o: SalesOrder) => {
+    e.stopPropagation();
+    const { statusText } = getOrderPaymentInfo(o);
+    const newAmount = statusText === "Paid" ? 0 : o.total;
+    const newStatus = statusText === "Paid" ? "Unpaid" : "Paid";
+    try {
+      await saveOrderPayment(o.id, newAmount);
+      toast.success(`Order ${o.orderNo} payment status updated to ${newStatus}`);
+    } catch (err: any) {
+      console.error("Error updating payment status:", err);
+      toast.error(`Error updating payment status: ${err.message || err}`);
+    }
+  };
 
   const changeStatus = async (o: SalesOrder, status: SalesStatus) => {
     try {
@@ -611,6 +944,12 @@ export default function SalesOrders() {
       console.error("Error updating status:", err);
       toast.error(`Error updating status: ${err.message || err}`);
     }
+  };
+
+  const handleDeleteOrder = async (order: SalesOrder) => {
+    if (!window.confirm(`Delete order "${order.orderNo}"? This item can be restored from the Recycle Bin.`)) return;
+    await deleteToBin("sales_order", order.id, order.orderNo, order, "salesOrders");
+    toast.success("Order moved to Recycle Bin");
   };
 
   return (
@@ -624,7 +963,7 @@ export default function SalesOrders() {
         <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
           <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Filter Date:</span>
           <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
-            {(["all", "week", "month", "custom"] as const).map((mode) => (
+            {(["all", "today", "week", "month", "custom"] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setDateFilter(mode)}
@@ -633,7 +972,7 @@ export default function SalesOrders() {
                     : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
                   }`}
               >
-                {mode === "all" ? "All Time" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
+                {mode === "all" ? "All Time" : mode === "today" ? "Today" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
               </button>
             ))}
           </div>
@@ -658,7 +997,7 @@ export default function SalesOrders() {
         </div>
 
         {/* Top Summary Stats Cards */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Card className="p-4 flex justify-between items-start">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Orders</p>
@@ -677,7 +1016,7 @@ export default function SalesOrders() {
               <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1 tabular-nums">
                 {inr(statRevenue)}
               </h3>
-              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">delivered only</p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">paid only</p>
             </div>
             <div className="rounded-lg bg-indigo-50 p-2 text-indigo-500 dark:bg-indigo-950/50 dark:text-indigo-400">
               <FileText className="h-5 w-5" />
@@ -690,21 +1029,9 @@ export default function SalesOrders() {
               <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1 tabular-nums">
                 {inr(statProfit)}
               </h3>
-              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">delivered only</p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">paid only</p>
             </div>
             <div className="rounded-lg bg-emerald-50 p-2 text-emerald-500 dark:bg-emerald-950/50 dark:text-emerald-400">
-              <FileText className="h-5 w-5" />
-            </div>
-          </Card>
-
-          <Card className="p-4 flex justify-between items-start">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Pending</p>
-              <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1 tabular-nums">
-                {statPending}
-              </h3>
-            </div>
-            <div className="rounded-lg bg-amber-50 p-2 text-amber-500 dark:bg-amber-950/50 dark:text-amber-400">
               <FileText className="h-5 w-5" />
             </div>
           </Card>
@@ -736,6 +1063,26 @@ export default function SalesOrders() {
             </button>
           );
         })}
+
+        <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 mx-2"></div>
+
+        {(["all", "Paid", "Unpaid", "Partial"] as const).map((pStatus) => {
+          const isActive = paymentFilter === pStatus;
+          return (
+            <button
+              key={pStatus}
+              onClick={() => setPaymentFilter(pStatus)}
+              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
+                isActive
+                  ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
+                  : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+              }`}
+            >
+              <span>{pStatus === "all" ? "All Payments" : pStatus}</span>
+            </button>
+          );
+        })}
+
         <Select value={channel} onChange={(e) => setChannel(e.target.value)} className="ml-auto w-auto">
           <option value="all">All channels</option>
           <option value="app">App</option>
@@ -745,22 +1092,24 @@ export default function SalesOrders() {
         </Select>
       </div>
 
-      {/* Search Bar */}
-      <div className="mb-4 mt-6 relative max-w-md">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <Input
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search by Order ID or Salon Name..."
-          className="pl-9"
-        />
+      {/* Sticky Search Bar Container */}
+      <div className="sticky top-[56px] z-10 bg-white/95 py-3 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200/50 dark:border-slate-800/50 mb-4 mt-6 -mx-4 px-4">
+        <div className="relative w-full max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by Order ID, Salon Name, or Owner Name..."
+            className="pl-9"
+          />
+        </div>
       </div>
 
       <div className="space-y-3">
         {rows.map((o) => {
           const { billAmount, amountPaid, balanceAmount, statusText, statusColor } = getOrderPaymentInfo(o);
           return (
-            <div key={o.id} onClick={() => navigate(`/orders/${o.id}`)} className="cursor-pointer">
+            <div key={o.id}>
               <Card className="p-4">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="w-24">
@@ -770,38 +1119,27 @@ export default function SalesOrders() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">
                       {(() => {
-                        const isPcOrder = (o.orderNo || "").startsWith("PC-") || (o.id || "").startsWith("PC-");
-                        if (isPcOrder) {
-                          const cid = o.salonId || o.customerId || o.userId || o.uid || "";
-                          const salonObj = salons.find((s: any) => s.id === cid);
-                          const appCust = adminCustomers.find((c: any) => c.id === cid);
-
-                          const getField = (obj: any, keys: string[]) => {
-                            for (const key of keys) {
-                              if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
-                                return obj[key];
-                              }
-                            }
-                            return "";
-                          };
-
-                          const customerName = o.salonName || getField(appCust, ["name", "customerName", "displayName", "ownerName"]) || getField(salonObj, ["ownerName", "name"]) || "-";
-                          const salonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || "-";
-
-                          if (salonName && salonName !== "-") {
-                            return (
-                              <span>
-                                {salonName} <span className="text-xs text-slate-400 font-normal">({customerName})</span>
-                              </span>
-                            );
-                          }
-                          return <span>{customerName}</span>;
+                        const salonName = o.resolvedSalonName || o.salonName;
+                        const custName = o.customerName;
+                        if (salonName && salonName !== "-" && custName && custName !== "-" && custName !== salonName) {
+                          return (
+                            <span>
+                              {salonName} <span className="text-xs text-slate-400 font-normal">({custName})</span>
+                            </span>
+                          );
                         }
-                        return o.salonName;
+                        return <span>{salonName || custName || "-"}</span>;
                       })()}
                     </div>
                     <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                      <StatusBadge value={o.channel} /> {(o.lines || []).length} items · <Badge color={statusColor}>{statusText}</Badge>
+                      <StatusBadge value={o.channel} /> {o.lines.length} items ·{" "}
+                      <button
+                        onClick={(e) => handlePaymentToggle(e, o)}
+                        className="hover:scale-105 active:scale-95 transition cursor-pointer"
+                        title={statusText === "Paid" ? "Click to mark as Unpaid" : "Click to mark as Paid"}
+                      >
+                        <Badge color={statusColor}>{statusText}</Badge>
+                      </button>
                     </div>
                   </div>
                   <div className="text-right flex flex-col justify-center items-end text-xs">
@@ -816,6 +1154,13 @@ export default function SalesOrders() {
                   <Button variant="secondary" onClick={(e) => { e.stopPropagation(); navigate(`/orders/${o.id}`); }}><Eye className="h-4 w-4" /> Details</Button>
                   <Button variant="secondary" onClick={(e) => { e.stopPropagation(); setNotify(o); }}><Bell className="h-4 w-4" /> Notify</Button>
                   <Button variant="secondary" onClick={(e) => { e.stopPropagation(); setInvoice(o); }}><FileText className="h-4 w-4" /> Invoice</Button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDeleteOrder(o); }}
+                    className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950 dark:hover:text-rose-400 transition"
+                    title="Delete Order"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
               </Card>
             </div>

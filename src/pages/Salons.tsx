@@ -4,14 +4,15 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import toast from "react-hot-toast";
 import { type ColumnDef } from "@tanstack/react-table";
-import { Plus, Store, Pencil, IndianRupee, Search, Trash2 } from "lucide-react";
+import { Plus, Store, Pencil, IndianRupee, Search, Trash2, Eye, Calendar } from "lucide-react";
 import { Button, Field, Input, Textarea, PageHeader, StatCard, Badge, Select } from "@/components/ui/primitives";
 import { DataTable } from "@/components/ui/DataTable";
 import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
 import { saveDoc, logActivity } from "@/services/data";
 import { db } from "@/lib/firebase";
-import { deleteDoc, doc } from "firebase/firestore";
+import { deleteDoc, doc, updateDoc } from "firebase/firestore";
+import { deleteToBin } from "@/services/recycleBin";
 import { inr, num, uid, getOrderPaymentInfo } from "@/lib/utils";
 import type { Salon } from "@/types";
 
@@ -36,6 +37,14 @@ const extractOwnerName = (obj: any) => {
 };
 const extractPhone = (obj: any) => getField(obj, ["phone", "mobile", "phoneNumber", "customerPhone", "ownerPhone"]);
 const extractEmail = (obj: any) => getField(obj, ["email", "customerEmail", "ownerEmail", "salonEmail", "userEmail"]);
+
+const getCustomerSalonName = (c: any, salons: any[]) => {
+  const direct = getField(c, ["salonName", "salon"]);
+  if (direct) return direct;
+  const salonId = c.salonId || c.id || "";
+  const found = salons.find((s: any) => s.id === salonId);
+  return found ? found.name : "";
+};
 
 const schema = z.object({
   name: z.string().min(2, "Required"),
@@ -144,6 +153,231 @@ function SalonForm({ open, onClose, editing }: { open: boolean; onClose: () => v
   );
 }
 
+function SalonDetailsModal({ salon, orders, onClose }: { salon: Salon; orders: any[]; onClose: () => void }) {
+  const [dateFilter, setDateFilter] = useState<"all" | "30days" | "90days" | "custom">("all");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [breakdownTab, setBreakdownTab] = useState<"week" | "month" | "year">("month");
+
+  // Filter orders by date
+  const filteredOrders = orders.filter((o) => {
+    if (dateFilter === "all") return true;
+    const ts = o.createdAt;
+    if (dateFilter === "30days") {
+      return ts >= Date.now() - 30 * 24 * 60 * 60 * 1000;
+    }
+    if (dateFilter === "90days") {
+      return ts >= Date.now() - 90 * 24 * 60 * 60 * 1000;
+    }
+    if (dateFilter === "custom") {
+      const start = customStart ? new Date(customStart).getTime() : 0;
+      const end = customEnd ? new Date(customEnd).getTime() + 86400000 - 1 : Infinity;
+      return ts >= start && ts <= end;
+    }
+    return true;
+  });
+
+  // Calculate totals
+  const totalOrders = filteredOrders.length;
+  const totalSales = filteredOrders.reduce((sum, o) => sum + o.total, 0);
+  const totalProfit = filteredOrders.reduce((sum, o) => sum + o.profit, 0);
+
+  // Group by helpers
+  const getWeekKey = (timestamp: number) => {
+    const d = new Date(timestamp);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday start
+    const startOfWeek = new Date(d.setDate(diff));
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+    const startStr = startOfWeek.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+    const endStr = endOfWeek.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" });
+    return `${startStr} - ${endStr}`;
+  };
+
+  const getMonthKey = (timestamp: number) => {
+    return new Date(timestamp).toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+  };
+
+  const getYearKey = (timestamp: number) => {
+    return new Date(timestamp).getFullYear().toString();
+  };
+
+  // Build breakdown data
+  const breakdownData = useMemo(() => {
+    const groups: Record<string, { label: string; count: number; sales: number; profit: number; minTs: number }> = {};
+
+    filteredOrders.forEach((o) => {
+      let key = "";
+      if (breakdownTab === "week") key = getWeekKey(o.createdAt);
+      else if (breakdownTab === "month") key = getMonthKey(o.createdAt);
+      else key = getYearKey(o.createdAt);
+
+      if (!groups[key]) {
+        groups[key] = { label: key, count: 0, sales: 0, profit: 0, minTs: o.createdAt };
+      }
+      groups[key].count += 1;
+      groups[key].sales += o.total;
+      groups[key].profit += o.profit;
+      groups[key].minTs = Math.min(groups[key].minTs, o.createdAt);
+    });
+
+    return Object.values(groups).sort((a, b) => b.minTs - a.minTs);
+  }, [filteredOrders, breakdownTab]);
+
+  return (
+    <Modal open={!!salon} onClose={onClose} title={`Salon Details & Performance: ${salon.name}`} wide
+      footer={<Button onClick={onClose}>Close</Button>}>
+      <div className="space-y-6">
+        {/* General Info Section */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50 text-sm">
+          <div>
+            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Owner Name</span>
+            <span className="font-semibold text-slate-900 dark:text-white">{salon.ownerName || "—"}</span>
+          </div>
+          <div>
+            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Phone</span>
+            <span className="font-semibold text-slate-900 dark:text-white">{salon.phone || "—"}</span>
+          </div>
+          <div>
+            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Email</span>
+            <span className="font-semibold text-slate-900 dark:text-white">{salon.email || "—"}</span>
+          </div>
+          <div>
+            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">GSTIN</span>
+            <span className="font-semibold text-slate-900 dark:text-white">{salon.gstin || "—"}</span>
+          </div>
+          <div>
+            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Branch No</span>
+            <span className="font-semibold text-slate-900 dark:text-white">{salon.branchNo || "—"}</span>
+          </div>
+          <div>
+            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Region / City</span>
+            <span className="font-semibold text-slate-900 dark:text-white">{salon.region || "—"}</span>
+          </div>
+          <div className="md:col-span-2">
+            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Address</span>
+            <span className="font-semibold text-slate-900 dark:text-white">{salon.address || "—"}</span>
+          </div>
+          {salon.description && (
+            <div className="md:col-span-2 lg:col-span-4">
+              <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Description / Notes</span>
+              <span className="text-slate-600 dark:text-slate-300">{salon.description}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Date Filter */}
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Time Period:</span>
+          <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
+            {(["all", "30days", "90days", "custom"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setDateFilter(mode)}
+                className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                  dateFilter === mode
+                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
+                    : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                }`}
+              >
+                {mode === "all" ? "All Time" : mode === "30days" ? "30 Days" : mode === "90days" ? "90 Days" : "Custom"}
+              </button>
+            ))}
+          </div>
+
+          {dateFilter === "custom" && (
+            <div className="flex items-center gap-2 animate-in slide-in-from-left-2 duration-200">
+              <input
+                type="date"
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
+              />
+              <span className="text-xs text-slate-400">to</span>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Summary Cards */}
+        <div className="grid grid-cols-3 gap-4">
+          <div className="rounded-xl border border-slate-200 p-4 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <div className="text-xs font-medium text-slate-500">Total Orders</div>
+            <div className="text-2xl font-bold mt-1 text-slate-900 dark:text-white">{totalOrders}</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-4 bg-white dark:border-slate-700/50 dark:bg-slate-900">
+            <div className="text-xs font-medium text-slate-500">Total Sales/Bill</div>
+            <div className="text-2xl font-bold mt-1 text-slate-900 dark:text-white">{inr(totalSales)}</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-4 bg-white dark:border-slate-700/50 dark:bg-slate-900">
+            <div className="text-xs font-medium text-slate-500">Total Profit</div>
+            <div className="text-2xl font-bold mt-1 text-emerald-600 dark:text-emerald-400">{inr(totalProfit)}</div>
+          </div>
+        </div>
+
+        {/* Frequency Breakdown Section */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-2 dark:border-slate-700">
+            <h3 className="font-semibold text-slate-900 dark:text-white">Order Frequency</h3>
+            
+            {/* Tabs for Week/Month/Year */}
+            <div className="flex rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800">
+              {(["week", "month", "year"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setBreakdownTab(tab)}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                    breakdownTab === tab
+                      ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
+                      : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                  }`}
+                >
+                  {tab === "week" ? "Weekly" : tab === "month" ? "Monthly" : "Yearly"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 dark:bg-slate-800">
+                <tr className="text-left text-xs uppercase text-slate-500">
+                  <th className="px-4 py-2.5 font-semibold">Period</th>
+                  <th className="px-4 py-2.5 font-semibold text-right">Orders</th>
+                  <th className="px-4 py-2.5 font-semibold text-right">Sales</th>
+                  <th className="px-4 py-2.5 font-semibold text-right">Profit</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {breakdownData.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-8 text-center text-slate-400">No data for this period.</td>
+                  </tr>
+                ) : (
+                  breakdownData.map((row) => (
+                    <tr key={row.label} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <td className="px-4 py-2.5 font-medium text-slate-900 dark:text-white">{row.label}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{row.count}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{inr(row.sales)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-emerald-600 font-semibold">{inr(row.profit)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 const SALON_STATUSES = ["Active", "Inactive", "Pending Approval", "Suspended", "Closed", "Archived"];
 
 export default function Salons() {
@@ -151,6 +385,9 @@ export default function Salons() {
   const adminCustomers = useDataStore((s: any) => s.adminCustomers || []);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Salon | null>(null);
+  const [detailsSalon, setDetailsSalon] = useState<Salon | null>(null);
+  const [detailsCustomer, setDetailsCustomer] = useState<any>(null);
+  const [editingCustomer, setEditingCustomer] = useState<any>(null);
   const [customerSearch, setCustomerSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [localVersion, setLocalVersion] = useState(0);
@@ -235,7 +472,6 @@ export default function Salons() {
         );
       } 
     },
-    { header: "GSTIN", accessorFn: (e) => e.salon.gstin || "—", cell: ({ getValue }) => <span className="text-slate-500">{getValue() as string}</span> },
     { header: "Status", accessorFn: (e) => e.status, cell: ({ getValue }) => {
         const s = getValue() as string;
         const color = {
@@ -253,26 +489,56 @@ export default function Salons() {
     { header: "Revenue", accessorKey: "revenue", cell: ({ getValue }) => <span className="font-semibold tabular-nums">{inr(getValue() as number)}</span> },
     { header: "Profit", accessorKey: "profit", cell: ({ getValue }) => <span className="font-semibold tabular-nums text-emerald-600">{inr(getValue() as number)}</span> },
     { header: "Outstanding", accessorFn: (e) => e.salon.outstanding, cell: ({ getValue }) => { const v = getValue() as number; return v > 0 ? <Badge color="rose">{inr(v)}</Badge> : <Badge color="emerald">Clear</Badge>; } },
-    { header: "", id: "actions", cell: ({ row }) => <button onClick={() => { setEditing(row.original.salon); setOpen(true); }} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><Pencil className="h-4 w-4" /></button> },
+    { 
+      header: "", 
+      id: "actions", 
+      cell: ({ row }) => (
+        <div className="flex items-center gap-1">
+          <button 
+            onClick={() => { setEditing(row.original.salon); setOpen(true); }} 
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white transition"
+            title="Edit Salon"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+          <button 
+            onClick={() => handleDeleteSalon(row.original.salon)} 
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950 dark:hover:text-rose-400 transition"
+            title="Delete Salon"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      )
+    },
   ];
 
-  const handleDeleteCustomer = async (id: string, name: string) => {
-    if (!window.confirm(`Delete customer "${name}"? This cannot be undone.`)) return;
-    if (db) await deleteDoc(doc(db, "users", id));
-    toast.success("Customer deleted");
+  const handleDeleteSalon = async (salon: Salon) => {
+    if (!window.confirm(`Delete salon "${salon.name}"? This item can be restored from the Recycle Bin.`)) return;
+    await deleteToBin("salon", salon.id, salon.name, salon, "salons");
+    toast.success("Salon moved to Recycle Bin");
+    setLocalVersion((v) => v + 1);
+  };
+
+  const handleDeleteCustomer = async (c: any) => {
+    const name = extractName(c) || c.email || "this customer";
+    if (!window.confirm(`Delete customer "${name}"? This item can be restored from the Recycle Bin.`)) return;
+    await deleteToBin("app_customer", c.id, name, c, "users");
+    toast.success("Customer moved to Recycle Bin");
+    setLocalVersion((v) => v + 1);
   };
 
   const filteredCustomers = useMemo(() => {
     const q = customerSearch.trim().toLowerCase();
     if (!q) return adminCustomers;
     return adminCustomers.filter((c: any) => {
-      const cSalonName = extractSalonName(c).toLowerCase();
-      const cOwnerName = extractOwnerName(c).toLowerCase();
-      const cPhone = extractPhone(c).toLowerCase();
-      const cEmail = extractEmail(c).toLowerCase();
-      return cSalonName.includes(q) || cOwnerName.includes(q) || cPhone.includes(q) || cEmail.includes(q);
+      const cName = (extractName(c) || "").toLowerCase();
+      const cPhone = (extractPhone(c) || "").toLowerCase();
+      const cEmail = (extractEmail(c) || "").toLowerCase();
+      const cSalon = (getCustomerSalonName(c, salons) || "").toLowerCase();
+      return cName.includes(q) || cPhone.includes(q) || cEmail.includes(q) || cSalon.includes(q);
     });
-  }, [adminCustomers, customerSearch]);
+  }, [adminCustomers, customerSearch, salons]);
 
   return (
     <div>
@@ -316,12 +582,12 @@ export default function Salons() {
       </div>
 
       <div className="mt-6">
-        <DataTable data={filteredRows} columns={columns} searchPlaceholder="Search salons…" />
+        <DataTable data={filteredRows} columns={columns} searchPlaceholder="Search salons…" onRowClick={(row) => setDetailsSalon(row.salon)} />
       </div>
 
       {/* ── App Customers (from admin dashboard, read-only) ─────────────── */}
       <div className="mt-10">
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="sticky top-[56px] z-10 bg-white/95 dark:bg-slate-900/95 backdrop-blur -mx-4 px-4 py-3 border-b border-slate-200/50 dark:border-slate-800/50 flex items-center justify-between gap-3 mb-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-white">App Customers</h2>
             <p className="text-xs text-slate-500">All users from the admin dashboard · {adminCustomers.length} total</p>
@@ -352,17 +618,20 @@ export default function Salons() {
                 <tr><td colSpan={4} className="py-10 text-center text-slate-400">No customers found.</td></tr>
               ) : (
                 filteredCustomers.map((c: any) => {
-                  const salonName = extractSalonName(c) || "-";
-                  const ownerName = extractOwnerName(c);
+                  const name = extractOwnerName(c) || getField(c, ["name", "displayName"]) || "-";
                   const email = extractEmail(c) || "-";
                   const phone = extractPhone(c) || "-";
+                  const salonName = getCustomerSalonName(c, salons) || extractSalonName(c) || "";
                   return (
                     <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                       <td className="px-4 py-3">
                         <div>
-                          <div className="font-medium text-slate-900 dark:text-white">{salonName}</div>
+                          <div className="font-medium text-slate-900 dark:text-white">
+                            {name}
+                            {salonName && salonName !== "-" ? <span className="ml-1.5 text-xs text-slate-400"> · {salonName}</span> : null}
+                          </div>
                           <div className="text-xs text-slate-400">
-                            {ownerName ? `${ownerName} · ` : ""}{email} · {phone}
+                            {email} · {phone}
                           </div>
                         </div>
                       </td>
@@ -379,12 +648,29 @@ export default function Salons() {
                         {c.createdAt ? new Date(typeof c.createdAt?.toDate === "function" ? c.createdAt.toDate() : c.createdAt).toLocaleDateString("en-IN") : "-"}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => handleDeleteCustomer(c.id, salonName !== "-" ? salonName : (email !== "-" ? email : "this customer"))}
-                          className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950 dark:hover:text-rose-400"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => setDetailsCustomer(c)}
+                            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white transition"
+                            title="View Details"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => setEditingCustomer(c)}
+                            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white transition"
+                            title="Edit Status"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCustomer(c)}
+                            className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950 dark:hover:text-rose-400 transition"
+                            title="Delete Customer"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -396,6 +682,119 @@ export default function Salons() {
       </div>
 
       <SalonForm open={open} onClose={() => { setOpen(false); setLocalVersion((v) => v + 1); }} editing={editing} />
+      {detailsSalon && (
+        <SalonDetailsModal 
+          salon={detailsSalon} 
+          orders={salesOrders.filter((o) => o.salonId === detailsSalon.id && o.status !== "Cancelled")} 
+          onClose={() => setDetailsSalon(null)} 
+        />
+      )}
+      {detailsCustomer && (
+        <AppCustomerDetailsModal
+          customer={detailsCustomer}
+          salonName={getCustomerSalonName(detailsCustomer, salons)}
+          onClose={() => setDetailsCustomer(null)}
+        />
+      )}
+      {editingCustomer && (
+        <EditAppCustomerModal
+          customer={editingCustomer}
+          onClose={() => setEditingCustomer(null)}
+          onUpdated={() => setLocalVersion((v) => v + 1)}
+        />
+      )}
     </div>
+  );
+}
+
+function AppCustomerDetailsModal({ customer, salonName, onClose }: { customer: any; salonName: string; onClose: () => void }) {
+  const joinedDate = customer.createdAt ? new Date(typeof customer.createdAt?.toDate === "function" ? customer.createdAt.toDate() : customer.createdAt).toLocaleString("en-IN") : "—";
+  return (
+    <Modal open={!!customer} onClose={onClose} title={`App Customer Details: ${customer.name || customer.displayName || "—"}`}
+      footer={<Button onClick={onClose}>Close</Button>}>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-sm">
+        <div>
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Name</span>
+          <span className="font-semibold text-slate-900 dark:text-white">{customer.name || customer.displayName || "—"}</span>
+        </div>
+        <div>
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Email</span>
+          <span className="font-semibold text-slate-900 dark:text-white">{customer.email || "—"}</span>
+        </div>
+        <div>
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Phone</span>
+          <span className="font-semibold text-slate-900 dark:text-white">{customer.phone || customer.mobile || "—"}</span>
+        </div>
+        <div>
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Salon Name</span>
+          <span className="font-semibold text-slate-900 dark:text-white">{salonName || "—"}</span>
+        </div>
+        <div>
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Status</span>
+          <span className="font-semibold text-slate-900 dark:text-white capitalize">{customer.status || "active"}</span>
+        </div>
+        <div>
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Joined</span>
+          <span className="font-semibold text-slate-900 dark:text-white">{joinedDate}</span>
+        </div>
+        {customer.uid && (
+          <div>
+            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">User UID</span>
+            <span className="font-mono text-xs text-slate-500">{customer.uid}</span>
+          </div>
+        )}
+        {Object.entries(customer).map(([key, val]) => {
+          if (["id", "name", "displayName", "email", "phone", "mobile", "status", "createdAt", "uid", "salonName", "salon", "salonId"].includes(key)) return null;
+          if (typeof val === "object" && val !== null) return null;
+          return (
+            <div key={key}>
+              <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400 capitalize">{key}</span>
+              <span className="font-semibold text-slate-900 dark:text-white">{String(val)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
+function EditAppCustomerModal({ customer, onClose, onUpdated }: { customer: any; onClose: () => void; onUpdated: () => void }) {
+  const [status, setStatus] = useState(customer.status || "active");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      if (db) {
+        await updateDoc(doc(db, "users", customer.id), { status });
+      } else {
+        const state = useDataStore.getState() as any;
+        const adminCustomers = state.adminCustomers || [];
+        const next = adminCustomers.map((c: any) => c.id === customer.id ? { ...c, status } : c);
+        state.setCollection("adminCustomers", next);
+      }
+      toast.success("Customer status updated");
+      onUpdated();
+      onClose();
+    } catch (err: any) {
+      console.error(err);
+      toast.error(`Error updating status: ${err.message || err}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open={!!customer} onClose={onClose} title={`Edit Customer Status: ${customer.name || customer.displayName || ""}`}
+      footer={<><Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button><Button onClick={handleSave} disabled={saving}>{saving ? "Saving…" : "Save"}</Button></>}>
+      <Field label="Status">
+        <Select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+          <option value="suspended">Suspended</option>
+          <option value="pending">Pending</option>
+        </Select>
+      </Field>
+    </Modal>
   );
 }
