@@ -96,7 +96,7 @@ export function topProducts(orders: SalesOrder[], limit = 5) {
   orders
     .filter((o) => o.status !== "Cancelled")
     .forEach((o) =>
-      o.lines.forEach((l) => {
+      (o.lines || []).forEach((l) => {
         const cur = map.get(l.productId) || { name: l.name, qty: 0, revenue: 0 };
         cur.qty += l.qty;
         cur.revenue += l.price * l.qty;
@@ -163,7 +163,7 @@ export function stockVelocity(products: Product[], orders: SalesOrder[]) {
   const sold = new Map<string, number>();
   orders
     .filter((o) => o.status !== "Cancelled" && o.createdAt >= Date.now() - 30 * 86400000)
-    .forEach((o) => o.lines.forEach((l) => sold.set(l.productId, (sold.get(l.productId) || 0) + l.qty)));
+    .forEach((o) => (o.lines || []).forEach((l) => sold.set(l.productId, (sold.get(l.productId) || 0) + l.qty)));
   return products.map((p) => {
     const q = sold.get(p.id) || 0;
     let band: "fast" | "slow" | "dead" = "dead";

@@ -921,8 +921,8 @@ export default function SalesOrders() {
                 key={mode}
                 onClick={() => setDateFilter(mode)}
                 className={`rounded-md px-3 py-1 text-xs font-medium transition ${dateFilter === mode
-                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
-                  : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
+                    : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
                   }`}
               >
                 {mode === "all" ? "All Time" : mode === "today" ? "Today" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
@@ -1000,15 +1000,15 @@ export default function SalesOrders() {
               key={s}
               onClick={() => setStatusTab(s)}
               className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${isActive
-                ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
-                : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+                  ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
+                  : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
                 }`}
             >
               <span>{s === "all" ? "All" : s}</span>
               <span
                 className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive
-                  ? "bg-white/20 text-white"
-                  : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                    ? "bg-white/20 text-white"
+                    : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
                   }`}
               >
                 {count}
