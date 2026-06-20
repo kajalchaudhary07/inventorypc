@@ -66,8 +66,11 @@ function AdjustModal({ open, onClose, product, variantId }: { open: boolean; onC
 
 export default function StockManagement() {
   const { stockMovements } = useDataStore();
-  const adminProducts = useDataStore((s: any) => s.adminProducts || []);
-  const inventoryProducts = useDataStore((s: any) => s.inventoryProducts || []);
+  const rawAdminProducts = useDataStore((s: any) => s.adminProducts || []);
+  const rawInventoryProducts = useDataStore((s: any) => s.inventoryProducts || []);
+
+  const adminProducts = useMemo(() => rawAdminProducts.filter((p: any) => p.isDeleted !== true), [rawAdminProducts]);
+  const inventoryProducts = useMemo(() => rawInventoryProducts.filter((p: any) => p.isDeleted !== true), [rawInventoryProducts]);
 
   const mergedAdminProducts = useMemo(() => getMergedProducts(adminProducts), [adminProducts]);
   const products = useMemo(() => {

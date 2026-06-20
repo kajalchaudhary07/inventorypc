@@ -48,6 +48,7 @@ export function buildInvoiceHtml(
     gstColumn: false,
     source: false,
     placeOfSupply: false,
+    delivery: false,
   },
   metadata?: {
     ownerName?: string;
@@ -88,11 +89,17 @@ export function buildInvoiceHtml(
   const computedSubtotal = order.subtotal !== undefined ? order.subtotal : order.lines.reduce((s: number, l: any) => s + (Number(l.price) || 0) * (Number(l.qty) || 0), 0);
   const chargesRows = (order.extraCharges || [])
     .map(
-      (c) => `
-      <div class="row">
-        <span>${esc(c.label || "Charge")}</span>
-        <span>${money(c.amount)}</span>
-      </div>`
+      (c) => {
+        if (c.label === "Delivery Charges" && !detailFields.delivery) {
+          return "";
+        }
+        const amtStr = c.label === "Delivery Charges" && c.amount === 0 ? "Free" : money(c.amount);
+        return `
+        <div class="row">
+          <span>${esc(c.label || "Charge")}</span>
+          <span>${amtStr}</span>
+        </div>`;
+      }
     )
     .join("");
 
@@ -217,6 +224,7 @@ export function printInvoice(
     gstColumn: false,
     source: false,
     placeOfSupply: false,
+    delivery: false,
   },
   metadata?: {
     ownerName?: string;
@@ -257,6 +265,7 @@ export function invoiceWhatsappText(
     gstColumn: false,
     source: false,
     placeOfSupply: false,
+    delivery: false,
   },
   metadata?: {
     ownerName?: string;
@@ -278,7 +287,14 @@ export function invoiceWhatsappText(
 
   const computedSubtotal = order.subtotal !== undefined ? order.subtotal : order.lines.reduce((s: number, l: any) => s + (Number(l.price) || 0) * (Number(l.qty) || 0), 0);
   const chargesList = (order.extraCharges || [])
-    .map((c) => `• ${c.label || "Charge"}: ${money(c.amount)}`)
+    .map((c) => {
+      if (c.label === "Delivery Charges" && !detailFields.delivery) {
+        return null;
+      }
+      const amtStr = c.label === "Delivery Charges" && c.amount === 0 ? "Free" : money(c.amount);
+      return `• ${c.label || "Charge"}: ${amtStr}`;
+    })
+    .filter(Boolean)
     .join("\n");
 
   return [
@@ -319,6 +335,7 @@ export function shareInvoiceWhatsapp(
     gstColumn: false,
     source: false,
     placeOfSupply: false,
+    delivery: false,
   },
   metadata?: {
     ownerName?: string;

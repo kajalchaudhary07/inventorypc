@@ -43,7 +43,8 @@ const formatDate = (timestamp: number | null | undefined) => {
 
 export default function AppCustomersPage() {
   const [search, setSearch] = useState("");
-  const adminCustomers = useDataStore((state: any) => state.adminCustomers || []);
+  const rawAdminCustomers = useDataStore((state: any) => state.adminCustomers || []);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
   const customers = useMemo(() => adminCustomers, [adminCustomers]) as AppCustomer[];
 
   const filtered = useMemo(() => {

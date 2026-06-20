@@ -304,28 +304,18 @@ export function logActivity(action: string, entity: string, detail: string, enti
 
 // Save payment amount for a sales order to Firestore
 export async function saveOrderPayment(orderId: string, amountPaid: number) {
+  const now = Date.now();
   // Save to salesOrders collection
   if (isFirebaseConfigured && db) {
     try {
       // Try updating salesOrders doc first
-      await updateDoc(doc(db, "salesOrders", orderId), { amountPaid });
+      await updateDoc(doc(db, "salesOrders", orderId), { amountPaid, updatedAt: now });
     } catch {
       // If salesOrders doc doesn't exist, create it with merge
-      await setDoc(doc(db, "salesOrders", orderId), { amountPaid }, { merge: true });
+      await setDoc(doc(db, "salesOrders", orderId), { amountPaid, updatedAt: now }, { merge: true });
     }
 
-    // Also update admin orders doc if it exists there
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adminOrders = (useDataStore.getState() as any).adminOrders || [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const isAdminOrder = adminOrders.some((o: any) => o.id === orderId);
-    if (isAdminOrder) {
-      try {
-        await updateDoc(doc(db, "orders", orderId), { amountPaid });
-      } catch (err) {
-        console.warn("[saveOrderPayment] Could not update orders/ doc:", err);
-      }
-    }
+
   }
 
   // Also update localStorage for backward compatibility
@@ -337,20 +327,19 @@ export async function saveOrderPayment(orderId: string, amountPaid: number) {
   } catch { /* ignore */ }
 
   // Update the local store so UI reflects immediately
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const state = useDataStore.getState() as any;
   const salesOrders = state.salesOrders || [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updatedSO = salesOrders.map((o: any) =>
-    o.id === orderId ? { ...o, amountPaid } : o
-  );
+  const exists = salesOrders.some((o: any) => o.id === orderId);
+  const updatedSO = exists
+    ? salesOrders.map((o: any) => o.id === orderId ? { ...o, amountPaid, updatedAt: now } : o)
+    : [{ id: orderId, amountPaid, updatedAt: now }, ...salesOrders];
   state.setCollection("salesOrders", updatedSO);
 
   // Also update adminOrders in local state
   const adminOrders = state.adminOrders || [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updatedAO = adminOrders.map((o: any) =>
-    o.id === orderId ? { ...o, amountPaid } : o
+    o.id === orderId ? { ...o, amountPaid, updatedAt: now } : o
   );
   state.setCollection("adminOrders", updatedAO);
 
@@ -388,7 +377,8 @@ export async function savePOPayment(poId: string, amountPaid: number) {
 // ---- Business operations -------------------------------------------------
 
 export async function createSalesOrder(o: SalesOrder) {
-  await saveDoc("salesOrders", o);
+  const orderWithUpdate = { ...o, updatedAt: o.updatedAt || o.createdAt || Date.now() };
+  await saveDoc("salesOrders", orderWithUpdate);
   const salon = useDataStore.getState().salons.find((s) => s.id === o.salonId);
   if (salon) {
     await saveDoc("salons", {
@@ -399,34 +389,29 @@ export async function createSalesOrder(o: SalesOrder) {
   }
   logActivity("Created order", "salesOrder", `${o.channel} order · ${o.salonName} · ${inr(o.total)}`, o.orderNo);
 }
-
 export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
   const now = Date.now();
   // Stamp the moment this status was first reached (don't overwrite existing).
-  const stamp: Partial<SalesOrder> = {};
+  const stamp: Partial<SalesOrder> = { updatedAt: now };
   if (status === "Packed" && !order.packedAt) stamp.packedAt = now;
   if (status === "Delivered" && !order.deliveredAt) stamp.deliveredAt = now;
   if (status === "Cancelled" && !order.cancelledAt) stamp.cancelledAt = now;
   if (status === "Returned" && !order.returnedAt) stamp.returnedAt = now;
-  await saveDoc("salesOrders", { ...order, status, ...stamp });
 
-  // Also update the original admin orders doc if it came from there
   if (isFirebaseConfigured && db) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adminOrders = (useDataStore.getState() as any).adminOrders || [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const isAdminOrder = adminOrders.some((o: any) => o.id === order.id);
-    if (isAdminOrder) {
-      try {
-        await updateDoc(doc(db, "orders", order.id), {
-          status,
-          orderStatus: status,
-        });
-      } catch (err) {
-        console.warn("[setOrderStatus] Could not update orders/ doc:", err);
-      }
-    }
+    await setDoc(doc(db, "salesOrders", order.id), { status, ...stamp }, { merge: true });
   }
+
+  // Update the local store so UI reflects immediately
+  const state = useDataStore.getState() as any;
+  const salesOrders = state.salesOrders || [];
+  const exists = salesOrders.some((o: any) => o.id === order.id);
+  const updatedSO = exists
+    ? salesOrders.map((o: any) => o.id === order.id ? { ...o, status, ...stamp } : o)
+    : [{ id: order.id, status, ...stamp }, ...salesOrders];
+  state.setCollection("salesOrders", updatedSO);
+
+
 
   // Handle stock transitions based on decremented status groups
   const DECREMENTED_STATUSES = ["Delivered", "Cancelled"];
@@ -443,14 +428,14 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
       const inventoryProducts = state.inventoryProducts || [];
       const p = adminProducts.find((x: any) => x.id === pId) || inventoryProducts.find((x: any) => x.id === pId);
       if (!p) continue;
-      
+
       await adjustStock(p, "out", -line.qty, `Sale (Order ${order.orderNo})`, vId);
     }
   } else if (!isDecremented && wasDecremented) {
     // Transition from decremented to non-decremented -> Increment stock back
     const type: MovementType = status === "Returned" ? "return" : "in";
     const reason = status === "Returned" ? `Customer return (Order ${order.orderNo})` : `Order reverted to ${status} (Order ${order.orderNo})`;
-    
+
     for (const line of order.lines) {
       const [pId, vId] = line.productId.split("__");
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -459,7 +444,7 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
       const inventoryProducts = state.inventoryProducts || [];
       const p = adminProducts.find((x: any) => x.id === pId) || inventoryProducts.find((x: any) => x.id === pId);
       if (!p) continue;
-      
+
       await adjustStock(p, type, line.qty, reason, vId);
     }
   }
@@ -556,7 +541,7 @@ export async function updateOrderPricing(
 ) {
   const extraCharges = extras?.extraCharges ?? order.extraCharges ?? [];
   const totals = orderTotals(lines, extraCharges);
-  
+
   const items = lines.map((l) => ({
     productId: l.productId,
     id: l.productId,
@@ -583,6 +568,7 @@ export async function updateOrderPricing(
     ...totals,
     extraCharges,
     invoiceNote: extras?.invoiceNote ?? order.invoiceNote ?? "",
+    updatedAt: Date.now(),
   };
   await saveDoc("salesOrders", updatedOrder);
 
@@ -604,34 +590,12 @@ export async function updateOrderPricing(
   );
   state.setCollection("adminOrders", updatedAO);
 
-  // Also update the original admin orders doc if it came from there
-  if (isFirebaseConfigured && db) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const isAdminOrder = adminOrders.some((o: any) => o.id === order.id);
-    if (isAdminOrder) {
-      try {
-        await updateDoc(doc(db, "orders", order.id), {
-          lines,
-          items,
-          total: totals.total,
-          subtotal: totals.subtotal,
-          gstTotal: totals.gstTotal,
-          discountTotal: totals.discountTotal,
-          profit: totals.profit,
-          extraCharges,
-          extraChargesTotal: totals.extraChargesTotal,
-          invoiceNote: extras?.invoiceNote ?? order.invoiceNote ?? "",
-        });
-      } catch (err) {
-        console.warn("[updateOrderPricing] Could not update orders/ doc:", err);
-      }
-    }
-  }
+
 
   if (updateMaster) {
     for (const l of lines) {
       const [pId, vId] = l.productId.split("__");
-      
+
       if (vId) {
         // Variant product: update variant's price and cost
         // Let's find the product in adminProducts

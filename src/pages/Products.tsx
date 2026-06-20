@@ -14,6 +14,7 @@ import { DataTable } from "@/components/ui/DataTable";
 import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
 import { saveDoc, removeDoc, logActivity } from "@/services/data";
+import { deleteToBin } from "@/services/recycleBin";
 import { inr, num, uid, exportCsv, cn } from "@/lib/utils";
 import { available, margin, profitPerUnit, isLow, isOut } from "@/lib/calc";
 import type { Product } from "@/types";
@@ -127,7 +128,8 @@ function ProductForm({ open, onClose, editing }: { open: boolean; onClose: () =>
 export default function Products() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const products = useDataStore((s) => s.products);
+  const rawProducts = useDataStore((s) => s.products);
+  const products = useMemo(() => rawProducts.filter((p: any) => p.isDeleted !== true), [rawProducts]);
   const [view, setView] = useState<"table" | "grid">("table");
   const [cat, setCat] = useState("all");
   const [status, setStatus] = useState("all");
@@ -173,10 +175,10 @@ export default function Products() {
     toast.success(p.status === "active" ? "Archived" : "Restored"); setMenu(null);
   };
   const del = async (p: Product) => {
-    if (!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
-    await removeDoc("products", p.id);
+    if (!confirm(`Delete "${p.name}"? This item can be restored from the Recycle Bin.`)) return;
+    await deleteToBin("product", p.id, p.name, p, "products");
     logActivity("Deleted product", "product", p.name, p.sku);
-    toast.success("Deleted"); setMenu(null);
+    toast.success("Product moved to Recycle Bin"); setMenu(null);
   };
 
   const statusBadge = (p: Product) =>

@@ -116,6 +116,7 @@ export interface SalesOrder {
   userId?: string;
   uid?: string;
   createdAt: number;
+  updatedAt?: number;
   // Editable-invoice extras (all optional for backward compatibility).
   extraCharges?: ExtraCharge[]; // custom rows below GST (surge, packaging, round-off…)
   extraChargesTotal?: number;
@@ -213,5 +214,6 @@ export interface DetailFieldsConfig {
   gstColumn: boolean;
   source: boolean;
   placeOfSupply: boolean;
+  delivery: boolean;
 }
 

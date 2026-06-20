@@ -26,11 +26,16 @@ interface SalonDraft {
 
 export default function ManualOrderEntry() {
   const navigate = useNavigate();
-  const { salons } = useDataStore();
-  const adminProducts = useDataStore((s: any) => s.adminProducts || []) as AnyRecord[];
-  const inventoryProducts = useDataStore((s: any) => s.inventoryProducts || []) as AnyRecord[];
-  const adminCustomers = useDataStore((s: any) => s.adminCustomers || []);
+  const { salons: rawSalons } = useDataStore();
+  const rawAdminProducts = useDataStore((s: any) => s.adminProducts || []) as AnyRecord[];
+  const rawInventoryProducts = useDataStore((s: any) => s.inventoryProducts || []) as AnyRecord[];
+  const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
   const defaultGst = useUIStore((s) => s.settings.defaultGst);
+
+  const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
+  const adminProducts = useMemo(() => rawAdminProducts.filter((p: any) => p.isDeleted !== true), [rawAdminProducts]);
+  const inventoryProducts = useMemo(() => rawInventoryProducts.filter((p: any) => p.isDeleted !== true), [rawInventoryProducts]);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
 
   // View state: "dashboard" or "entry"
   const [view, setView] = useState<"dashboard" | "entry">("dashboard");

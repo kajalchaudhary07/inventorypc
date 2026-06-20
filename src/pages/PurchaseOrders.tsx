@@ -11,9 +11,13 @@ import type { PurchaseLine, PurchaseOrder } from "@/types";
 import { getMergedProducts } from "@/services/productOverrides";
 
 function CreatePO({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { vendors } = useDataStore();
-  const adminProducts = useDataStore((s: any) => s.adminProducts || []);
-  const inventoryProducts = useDataStore((s: any) => s.inventoryProducts || []);
+  const { vendors: rawVendors } = useDataStore();
+  const rawAdminProducts = useDataStore((s: any) => s.adminProducts || []);
+  const rawInventoryProducts = useDataStore((s: any) => s.inventoryProducts || []);
+
+  const vendors = useMemo(() => rawVendors.filter((v: any) => v.isDeleted !== true), [rawVendors]);
+  const adminProducts = useMemo(() => rawAdminProducts.filter((p: any) => p.isDeleted !== true), [rawAdminProducts]);
+  const inventoryProducts = useMemo(() => rawInventoryProducts.filter((p: any) => p.isDeleted !== true), [rawInventoryProducts]);
 
   const mergedAdminProducts = useMemo(() => getMergedProducts(adminProducts), [adminProducts]);
   const products = useMemo(() => {
@@ -312,7 +316,9 @@ function PODetailModal({ po, onClose, onSave }: { po: PurchaseOrder | null; onCl
 }
 
 export default function PurchaseOrders() {
-  const { purchaseOrders, vendors } = useDataStore();
+  const { purchaseOrders: rawPurchaseOrders, vendors: rawVendors } = useDataStore();
+  const purchaseOrders = useMemo(() => rawPurchaseOrders.filter((po: any) => po.isDeleted !== true), [rawPurchaseOrders]);
+  const vendors = useMemo(() => rawVendors.filter((v: any) => v.isDeleted !== true), [rawVendors]);
   const [createOpen, setCreateOpen] = useState(false);
   const [receiving, setReceiving] = useState<PurchaseOrder | null>(null);
   const [filter, setFilter] = useState("all");

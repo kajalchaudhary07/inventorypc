@@ -93,7 +93,9 @@ function VendorForm({ open, onClose, editing }: { open: boolean; onClose: () => 
 const VENDOR_STATUSES = ["Active", "Inactive", "Pending Approval", "Suspended", "Closed", "Archived"];
 
 export default function Vendors() {
-  const { vendors, purchaseOrders } = useDataStore();
+  const { vendors: rawVendors, purchaseOrders: rawPurchaseOrders } = useDataStore();
+  const vendors = useMemo(() => rawVendors.filter((v: any) => v.isDeleted !== true), [rawVendors]);
+  const purchaseOrders = useMemo(() => rawPurchaseOrders.filter((po: any) => po.isDeleted !== true), [rawPurchaseOrders]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Vendor | null>(null);
   const [filter, setFilter] = useState("all");

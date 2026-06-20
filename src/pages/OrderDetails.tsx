@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useDataStore } from "@/store/dataStore";
+import { mergeOrders } from "@/services/orderMerger";
 import { Card, PageHeader, Button } from "@/components/ui/primitives";
 import { inr, getOrderPaymentInfo } from "@/lib/utils";
 import { saveOrderPayment } from "@/services/data";
@@ -65,15 +66,22 @@ const getTotal = (order: any) =>
 export default function OrderDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const adminOrders = useDataStore((s: any) => s.adminOrders || []);
-  const salesOrders = useDataStore((s: any) => s.salesOrders || []);
-  const adminCustomers = useDataStore((s: any) => s.adminCustomers || []);
-  const salons = useDataStore((s: any) => s.salons || []);
+  const rawAdminOrders = useDataStore((s: any) => s.adminOrders || []);
+  const rawSalesOrders = useDataStore((s: any) => s.salesOrders || []);
+  const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
+  const rawSalons = useDataStore((s: any) => s.salons || []);
+
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
+  const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
+
+  const orders = useMemo(() => {
+    return mergeOrders(adminOrders, rawSalesOrders, salons, adminCustomers);
+  }, [adminOrders, rawSalesOrders, salons, adminCustomers]);
 
   const order = useMemo(() => {
-    const all = [...(adminOrders || []), ...(salesOrders || [])];
-    return all.find((o: any) => o.id === id || o.orderNo === id || o.orderId === id) || null;
-  }, [id, adminOrders, salesOrders]);
+    return orders.find((o: any) => o.id === id || o.orderNo === id || o.orderId === id) || null;
+  }, [id, orders]);
 
   const [localVersion, setLocalVersion] = useState(0);
 
@@ -118,9 +126,9 @@ export default function OrderDetails() {
       const cost = Number(item.cost ?? item.costPrice ?? 0);
       const gstRate = Number(item.gstRate ?? item.gstPercent ?? item.gst ?? 0);
       const discount = Number(item.discount ?? 0);
-      
+
       const profit = (price - cost) * qty;
-      
+
       const netAmount = price * qty - discount;
       const gstAmount = (netAmount * gstRate) / 100;
       const lineTotal = netAmount + gstAmount;
@@ -214,19 +222,32 @@ export default function OrderDetails() {
 
   const badgeClasses = paymentInfo
     ? {
-        emerald: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
-        amber: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-        rose: "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200"
-      }[paymentInfo.statusColor as "emerald" | "amber" | "rose"] || "bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200"
+      emerald: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+      amber: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+      rose: "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200"
+    }[paymentInfo.statusColor as "emerald" | "amber" | "rose"] || "bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200"
     : "bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200";
 
   return (
     <div className="space-y-4">
       <PageHeader
         title={`${customer.name} — ${orderRef}`}
-        subtitle={`Created: ${formatDateTime(createdAt)}`}
+        subtitle={
+          <div className="flex flex-col gap-1 sm:flex-row sm:gap-4 text-xs text-slate-500 mt-1">
+            <div>Order Placed: {formatDateTime(createdAt)}</div>
+            {order.updatedAt && Math.abs(order.updatedAt - createdAt) > 60000 && (
+              <div className="text-indigo-600 dark:text-indigo-400 font-medium">Last Updated: {formatDateTime(order.updatedAt)}</div>
+            )}
+          </div>
+        }
         actions={<Button variant="secondary" onClick={() => navigate("/sales-orders")}><ArrowLeft className="h-4 w-4" /> Back to Orders</Button>}
       />
+
+      {order.isAdminDeleted && (
+        <div className="rounded-lg bg-rose-50 p-3.5 text-sm font-semibold text-rose-800 ring-1 ring-inset ring-rose-200 dark:bg-rose-950/30 dark:text-rose-400 dark:ring-rose-900 animate-in fade-in duration-300">
+          ⚠️ This order was deleted from the Admin/E-Commerce Dashboard. The local inventory overrides and payment records are preserved here.
+        </div>
+      )}
 
       {/* Info cards row */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">

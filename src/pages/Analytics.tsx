@@ -6,6 +6,7 @@ import {
 import { FileDown, Printer, Zap, Turtle, Skull, AlertTriangle } from "lucide-react";
 import { Button, Card, PageHeader, Badge } from "@/components/ui/primitives";
 import { useDataStore } from "@/store/dataStore";
+import { mergeOrders } from "@/services/orderMerger";
 import { inr, num, exportCsv } from "@/lib/utils";
 import {
   salesByDay, salesByMonth, stockVelocity, available, isLow, margin,
@@ -24,7 +25,20 @@ function ChartCard({ title, children, h = "h-64" }: { title: string; children: R
 }
 
 export default function Analytics() {
-  const { products, salesOrders, purchaseOrders } = useDataStore();
+  const { products: rawProducts, salesOrders: rawSalesOrders, purchaseOrders: rawPurchaseOrders, salons: rawSalons } = useDataStore();
+  const rawAdminOrders = useDataStore((s: any) => s.adminOrders || []);
+  const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
+
+  const products = useMemo(() => rawProducts.filter((p: any) => p.isDeleted !== true), [rawProducts]);
+  const purchaseOrders = useMemo(() => rawPurchaseOrders.filter((po: any) => po.isDeleted !== true), [rawPurchaseOrders]);
+  const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
+
+  const salesOrders = useMemo(() => {
+    return mergeOrders(adminOrders, rawSalesOrders, salons, adminCustomers);
+  }, [adminOrders, rawSalesOrders, salons, adminCustomers]);
+
   const [range, setRange] = useState<"week" | "month">("week");
 
   const salesSeries = range === "week" ? salesByDay(salesOrders, 7) : salesByMonth(salesOrders, 6);
@@ -32,7 +46,7 @@ export default function Analytics() {
   const byCategory = useMemo(() => {
     const map = new Map<string, number>();
     salesOrders.filter((o) => o.status !== "Cancelled").forEach((o) =>
-      o.lines.forEach((l) => {
+      o.lines.forEach((l: any) => {
         const p = products.find((x) => x.id === l.productId);
         const cat = p?.category ?? "Other";
         map.set(cat, (map.get(cat) || 0) + l.price * l.qty);

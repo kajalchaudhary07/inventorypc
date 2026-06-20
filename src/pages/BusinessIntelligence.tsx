@@ -11,6 +11,7 @@ import {
 import toast from "react-hot-toast";
 import { Card, StatCard, Button, PageHeader, Badge, Input, Select } from "@/components/ui/primitives";
 import { useDataStore } from "@/store/dataStore";
+import { mergeOrders } from "@/services/orderMerger";
 import { inr, num, pct } from "@/lib/utils";
 import {
   totalSales, grossProfit, gmv, ordersCount, averageOrderValue,
@@ -41,7 +42,19 @@ function ChartCard({ title, sub, children, h = "h-64" }: { title: string; sub?: 
 type RangePreset = "all" | "7" | "30" | "90" | "custom";
 
 export default function BusinessIntelligence() {
-  const { salesOrders, products, salons } = useDataStore();
+  const { salesOrders: rawSalesOrders, products: rawProducts, salons: rawSalons } = useDataStore();
+  const rawAdminOrders = useDataStore((s: any) => s.adminOrders || []);
+  const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
+
+  const products = useMemo(() => rawProducts.filter((p: any) => p.isDeleted !== true), [rawProducts]);
+  const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
+
+  const salesOrders = useMemo(() => {
+    return mergeOrders(adminOrders, rawSalesOrders, salons, adminCustomers);
+  }, [adminOrders, rawSalesOrders, salons, adminCustomers]);
+
   const [preset, setPreset] = useState<RangePreset>("30");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");

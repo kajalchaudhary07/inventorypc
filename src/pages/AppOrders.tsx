@@ -29,7 +29,8 @@ const formatCurrency = (amount: number | undefined) => {
 
 export default function AppOrdersPage() {
   const [search, setSearch] = useState("");
-  const adminOrders = useDataStore((state: any) => state.adminOrders || []);
+  const rawAdminOrders = useDataStore((state: any) => state.adminOrders || []);
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
   const adminCustomers = useDataStore((state: any) => state.adminCustomers || []);
   const salons = useDataStore((state: any) => state.salons || []);
 
@@ -76,7 +77,7 @@ export default function AppOrdersPage() {
       }
       return customerName;
     }
-    
+
     return order.customerName || "-";
   };
 

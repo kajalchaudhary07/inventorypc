@@ -2,29 +2,38 @@ import { useEffect, useState, useMemo } from "react";
 import toast from "react-hot-toast";
 import { Trash2, RotateCcw, Search, Trash } from "lucide-react";
 import { Button, Card, PageHeader, Badge, Input } from "@/components/ui/primitives";
-import { getBinItems, restoreFromBin, deletePermanently, pruneBinItems, saveBinItems, type BinItem } from "@/services/recycleBin";
+import { fetchDbBinItems, restoreFromBin, deletePermanently, type BinItem } from "@/services/recycleBin";
 
 const TYPE_LABELS: Record<BinItem["type"], string> = {
   salon: "Salon Customer",
   app_customer: "App Customer",
   vendor: "Vendor",
   sales_order: "Sales Order",
+  product: "App Product",
+  inventory_product: "Manual Product",
 };
 
-const TYPE_COLORS: Record<BinItem["type"], "indigo" | "amber" | "emerald" | "rose"> = {
+const TYPE_COLORS: Record<BinItem["type"], "indigo" | "amber" | "emerald" | "rose" | "indigo" | "violet"> = {
   salon: "indigo",
   app_customer: "amber",
   vendor: "emerald",
   sales_order: "rose",
+  product: "indigo",
+  inventory_product: "violet",
 };
 
 export default function RecycleBin() {
   const [items, setItems] = useState<BinItem[]>([]);
   const [search, setSearch] = useState("");
 
-  const loadBin = () => {
-    pruneBinItems();
-    setItems(getBinItems());
+  const loadBin = async () => {
+    try {
+      const dbItems = await fetchDbBinItems();
+      setItems(dbItems);
+    } catch (err: any) {
+      console.error("Failed to load recycle bin from Firestore:", err);
+      toast.error("Failed to load recycle bin items");
+    }
   };
 
   useEffect(() => {
@@ -42,18 +51,30 @@ export default function RecycleBin() {
     }
   };
 
-  const handleDeletePermanently = (item: BinItem) => {
+  const handleDeletePermanently = async (item: BinItem) => {
     if (!confirm(`Permanently delete "${item.name}"? This action is irreversible.`)) return;
-    deletePermanently(item.id, item.type);
-    toast.success(`Permanently deleted "${item.name}"`);
-    loadBin();
+    try {
+      await deletePermanently(item.id, item.type);
+      toast.success(`Permanently deleted "${item.name}"`);
+      loadBin();
+    } catch (err: any) {
+      console.error(err);
+      toast.error(`Failed to delete permanently: ${err.message || err}`);
+    }
   };
 
-  const handleEmptyBin = () => {
+  const handleEmptyBin = async () => {
     if (!confirm("Are you sure you want to permanently delete ALL items in the Recycle Bin? This cannot be undone.")) return;
-    saveBinItems([]);
-    toast.success("Recycle Bin emptied");
-    loadBin();
+    try {
+      for (const item of items) {
+        await deletePermanently(item.id, item.type);
+      }
+      toast.success("Recycle Bin emptied");
+      loadBin();
+    } catch (err: any) {
+      console.error(err);
+      toast.error(`Failed to empty bin: ${err.message || err}`);
+    }
   };
 
   const filtered = useMemo(() => {

@@ -15,6 +15,7 @@ import { printInvoice, shareInvoiceWhatsapp } from "@/lib/invoice";
 import { paymentReminderDraft, orderUpdateDraft, shareTextWhatsapp } from "@/lib/messages";
 import { getMergedProducts } from "@/services/productOverrides";
 import type { ExtraCharge, OrderLine, Product, SalesOrder, SalesStatus, DetailFieldsConfig } from "@/types";
+import { mergeOrders } from "@/services/orderMerger";
 
 const STATUSES: SalesStatus[] = ["Pending", "Packed", "Delivered", "Cancelled", "Returned"];
 
@@ -48,6 +49,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     gstColumn: false,
     source: false,
     placeOfSupply: false,
+    delivery: false,
   });
 
   const prevOrderIdRef = useRef<string | null>(null);
@@ -72,6 +74,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         gstColumn: false,
         source: false,
         placeOfSupply: false,
+        delivery: false,
       });
       prevOrderIdRef.current = null;
       return;
@@ -79,6 +82,24 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
 
     if (prevOrderIdRef.current !== order.id) {
       prevOrderIdRef.current = order.id;
+
+      // Calculate delivery difference
+      const originalTotals = orderTotals(order.lines, []);
+      const originalBaseTotal = originalTotals.total;
+      const deliveryDiff = Math.max(0, order.total - originalBaseTotal);
+
+      const loadedCharges = order.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : [];
+      const hasDeliveryInCharges = loadedCharges.some((c) => c.label === "Delivery Charges");
+      const isApp = order.channel === "app";
+      const hasDelivery = deliveryDiff > 0 || isApp;
+
+      if (!hasDeliveryInCharges && hasDelivery) {
+        loadedCharges.push({
+          id: "delivery",
+          label: "Delivery Charges",
+          amount: deliveryDiff,
+        });
+      }
 
       setLines(order.lines.map((l) => {
         let mrp = (l as any).mrp;
@@ -99,7 +120,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
           mrp: Number(mrp ?? l.price)
         };
       }));
-      setCharges(order.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : []);
+      setCharges(loadedCharges);
       setNote(order.invoiceNote ?? "");
       setEditing(false);
       setAskSave(false);
@@ -115,13 +136,15 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         gstColumn: false,
         source: false,
         placeOfSupply: false,
+        delivery: hasDelivery,
       });
     }
   }, [order, allProducts]);
 
   if (!order) return null;
 
-  const totals = orderTotals(lines, charges);
+  const activeCharges = charges.filter((c) => c.label !== "Delivery Charges" || detailFields.delivery);
+  const totals = orderTotals(lines, activeCharges);
   const dirty =
     JSON.stringify(lines) !== JSON.stringify(order.lines) ||
     JSON.stringify(charges) !== JSON.stringify(order.extraCharges ?? []) ||
@@ -182,13 +205,13 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
 
   const matches = search
     ? allProducts
-        .filter((p) => {
-          const name = (p.name || "").toLowerCase();
-          const sku = (p.sku || "").toLowerCase();
-          const q = search.trim().toLowerCase();
-          return p.status === "active" && (name.includes(q) || sku.includes(q));
-        })
-        .slice(0, 6)
+      .filter((p) => {
+        const name = (p.name || "").toLowerCase();
+        const sku = (p.sku || "").toLowerCase();
+        const q = search.trim().toLowerCase();
+        return p.status === "active" && (name.includes(q) || sku.includes(q));
+      })
+      .slice(0, 6)
     : [];
 
   const addCharge = () => setCharges((prev) => [...prev, { id: uid(), label: "", amount: 0 }]);
@@ -255,7 +278,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
 
   const ownerName = getField(salonObj, ["ownerName"]) || getField(appCust, ["ownerName", "name", "customerName", "displayName"]) || "-";
   const salonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || order.salonName || "-";
-  
+
   let salonAddress = getField(salonObj, ["address"]) || getField(appCust, ["address"]) || "";
   if (!salonAddress) {
     const d = (order as any).deliveryAddress || (order as any).address || (order as any).shippingAddress || (order as any).customer?.address;
@@ -298,7 +321,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
   }, 0);
 
   // Working order used for print / WhatsApp so unsaved edits are reflected.
-  const workingOrder: SalesOrder = { ...order, lines, extraCharges: charges, invoiceNote: note, ...totals };
+  const workingOrder: SalesOrder = { ...order, lines, extraCharges: activeCharges, invoiceNote: note, ...totals };
   const { billAmount, amountPaid, balanceAmount, statusText, statusColor } = getOrderPaymentInfo(workingOrder);
 
   const paymentStatusColorClass = {
@@ -404,6 +427,15 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
               />
               <span>Place of Supply</span>
             </label>
+            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={detailFields.delivery}
+                onChange={(e) => setDetailFields((prev) => ({ ...prev, delivery: e.target.checked }))}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+              />
+              <span>Delivery</span>
+            </label>
           </div>
         </div>
 
@@ -417,7 +449,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
             <div>Order Placed: {metadata.placementDateTime}</div>
           </div>
         </div>
-        
+
         <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800 space-y-1">
           <div className="font-semibold text-slate-900 dark:text-white">Salon: {metadata.salonName}</div>
           <div className="text-xs text-slate-600 dark:text-slate-300">Owner: {metadata.ownerName}</div>
@@ -548,9 +580,14 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         <div className="ml-auto w-72 space-y-1 border-t border-slate-100 dark:border-slate-800 pt-3">
           <Line k="Subtotal" v={inr(totals.subtotal)} />
           {totals.discountTotal > 0 && <Line k="Discount" v={`- ${inr(totals.discountTotal)}`} />}
-          {charges.map((c) => (
-            <Line key={c.id} k={c.label || "Charge"} v={inr(c.amount)} />
-          ))}
+          {charges.map((c) => {
+            if (c.label === "Delivery Charges" && !detailFields.delivery) {
+              return null;
+            }
+            return (
+              <Line key={c.id} k={c.label || "Charge"} v={c.label === "Delivery Charges" && c.amount === 0 ? "Free" : inr(c.amount)} />
+            );
+          })}
           {detailFields.totalGst && <Line k="Total GST" v={inr(totals.gstTotal)} />}
           <div className="border-t border-slate-200 my-1 pt-1 dark:border-slate-700"></div>
           <Line k="Bill Amount" v={inr(totals.total)} bold />
@@ -704,139 +741,54 @@ function Line({ k, v, bold }: { k: string; v: string; bold?: boolean }) {
 
 export default function SalesOrders() {
   const navigate = useNavigate();
-  const adminOrders = useDataStore((s) => (s as any).adminOrders || []);
-  const salesOrders = useDataStore((s) => s.salesOrders || []);
-  const adminCustomers = useDataStore((s: any) => s.adminCustomers || []);
-  const salons = useDataStore((s) => s.salons || []);
+  const rawAdminOrders = useDataStore((s) => (s as any).adminOrders || []);
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
+  const rawSalesOrders = useDataStore((s) => s.salesOrders || []);
+  const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
+  const rawSalons = useDataStore((s) => s.salons || []);
+  const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
 
-  // Normalize a Firestore Timestamp / Date / ms / ISO string → ms number
-  const toMs = (ts: any): number => {
-    if (!ts) return Date.now();
-    if (typeof ts?.toDate === "function") return ts.toDate().getTime();
-    if (ts instanceof Date) return ts.getTime();
-    if (typeof ts === "number") return ts;
-    const p = new Date(ts as string);
-    return Number.isNaN(p.getTime()) ? Date.now() : p.getTime();
-  };
-
-  // Merge admin orders and inventory salesOrders. Prefer inventory-specific (salesOrders) when ids collide.
+  // Merge admin orders and inventory salesOrders using the orderMerger service.
   const orders = useMemo(() => {
-    const map = new Map<string, any>();
-    
-    const getField = (obj: any, keys: string[]) => {
-      for (const key of keys) {
-        if (obj && obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
-          return obj[key];
+    return mergeOrders(adminOrders, rawSalesOrders, salons, adminCustomers);
+  }, [adminOrders, rawSalesOrders, salons, adminCustomers]);
+
+  // Automatically soft-delete orders that have been deleted from the Admin Dashboard
+  useEffect(() => {
+    let active = true;
+    const checkAndSoftDelete = async () => {
+      for (const o of orders) {
+        if (o.isAdminDeleted && !o.isDeleted && !o.isPermanentlyDeleted) {
+          // Check if this order has modifications in the salesOrders collection
+          const so = rawSalesOrders.find((x: any) => x.id === o.id) as any;
+          const isModified = !!(
+            so &&
+            (so.amountPaid !== undefined ||
+              so.status !== undefined ||
+              so.paymentStatus !== undefined ||
+              (so.lines && so.lines.length > 0) ||
+              (so.items && so.items.length > 0))
+          );
+
+          if (!isModified) {
+            try {
+              await deleteToBin("sales_order", o.id, o.orderNo || o.id, o, "salesOrders");
+              if (active) {
+                toast.success(`Order ${o.orderNo || o.id} deleted from admin, moved to Recycle Bin`);
+              }
+            } catch (err) {
+              console.error("Auto soft-delete failed for order:", o.id, err);
+            }
+          }
         }
       }
-      return "";
     };
-
-    const resolveOrderNames = (o: any) => {
-      const cid = o.salonId || o.customerId || o.userId || o.uid || "";
-      const salonObj = salons.find((x: any) => x.id === cid);
-      const appCust = adminCustomers.find((x: any) => x.id === cid);
-      
-      const ownerName = getField(salonObj, ["ownerName"]) || getField(appCust, ["ownerName", "name", "customerName", "displayName"]) || "";
-      const resolvedSalonName = getField(salonObj, ["name"]) || getField(appCust, ["salonName", "salon"]) || o.salonName || o.customerName || "";
-      const customerName = o.salonName || getField(appCust, ["name", "customerName", "displayName", "ownerName"]) || getField(salonObj, ["ownerName", "name"]) || resolvedSalonName || "";
-      
-      return {
-        ownerName,
-        resolvedSalonName,
-        customerName
-      };
+    checkAndSoftDelete();
+    return () => {
+      active = false;
     };
-
-    // add inventory sales orders first (they take precedence)
-    (salesOrders || []).forEach((o: any) => {
-      const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
-      const lines = rawItems.map((item: any) => ({
-        productId: item.productId || item.id || "",
-        name: item.name || item.title || item.productName || "",
-        sku: item.sku || item.productId || "",
-        qty: Number(item.quantity ?? item.qty ?? 1) || 1,
-        price: Number(item.price ?? item.unitPrice ?? 0),
-        cost: Number(item.cost ?? item.costPrice ?? item.cost ?? 0),
-        gstRate: Number(item.gstRate ?? item.gstPercent ?? item.gst ?? 0),
-        discount: Number(item.discount ?? 0),
-        mrp: item.mrp !== undefined ? Number(item.mrp) : undefined,
-        description: item.description || "",
-      }));
-      const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
-      const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
-      
-      map.set(o.id, {
-        ...o,
-        id: o.id,
-        orderNo: o.orderNo || o.orderId || o.code || o.number || o.id,
-        salonName: resolvedSalonName || o.salonName || "-",
-        salonId: o.salonId || o.customerId || o.userId || o.uid || null,
-        lines,
-        total: Number(o.total ?? o.amount ?? o.totalAmount ?? o.grandTotal ?? o.payableAmount ?? 0),
-        profit,
-        createdAt: toMs(o.createdAt || o.orderDate || o.date),
-        status: o.status || o.orderStatus || "Pending",
-        channel: o.channel || o.source || "app",
-        paymentStatus: o.paymentStatus || o.payment_status || "Pending",
-        expectedDelivery: o.expectedDelivery,
-        ownerName,
-        resolvedSalonName,
-        customerName
-      });
-    });
-    // add admin orders normalized so existing UI works
-    (adminOrders || []).forEach((o: any) => {
-      if (map.has(o.id)) return;
-      const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
-      const lines = rawItems.map((item: any) => ({
-        productId: item.productId || item.id || "",
-        name: item.name || item.title || item.productName || "",
-        sku: item.sku || item.productId || "",
-        qty: Number(item.quantity ?? item.qty ?? 1) || 1,
-        price: Number(item.price ?? item.unitPrice ?? 0),
-        cost: Number(item.cost ?? item.costPrice ?? item.cost ?? 0),
-        gstRate: Number(item.gstRate ?? item.gstPercent ?? item.gst ?? 0),
-        discount: Number(item.discount ?? 0),
-        mrp: item.mrp !== undefined ? Number(item.mrp) : undefined,
-        description: item.description || "",
-      }));
-      const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
-      const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
-      const rawSalonName =
-        o.salonName ||
-        o.contactDetails?.receiverName ||
-        o.receiverName ||
-        o.customerName ||
-        o.customer?.name ||
-        o.userName ||
-        o.userId ||
-        "-";
-      const finalSalonName = resolvedSalonName || rawSalonName;
-      
-      const normalized = {
-        // keep raw doc for detail page
-        ...o,
-        id: o.id,
-        orderNo: o.orderNo || o.orderId || o.code || o.number || o.id,
-        salonName: finalSalonName,
-        salonId: o.salonId || o.customerId || o.userId || o.uid || null,
-        lines,
-        total: Number(o.total ?? o.amount ?? o.totalAmount ?? o.grandTotal ?? o.payableAmount ?? 0),
-        profit,
-        createdAt: toMs(o.createdAt || o.orderDate || o.date),
-        status: o.status || o.orderStatus || "Pending",
-        channel: o.channel || o.source || "app",
-        paymentStatus: o.paymentStatus || o.payment_status || "Pending",
-        expectedDelivery: o.expectedDelivery,
-        ownerName,
-        resolvedSalonName: finalSalonName,
-        customerName: customerName || rawSalonName
-      };
-      map.set(o.id, normalized);
-    });
-    return Array.from(map.values());
-  }, [adminOrders, salesOrders, salons, adminCustomers]);
+  }, [orders, rawSalesOrders]);
 
   const [statusTab, setStatusTab] = useState("all");
   const [channel, setChannel] = useState("all");
@@ -844,11 +796,11 @@ export default function SalesOrders() {
   const [invoice, setInvoice] = useState<SalesOrder | null>(null);
   const [notify, setNotify] = useState<SalesOrder | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
- 
+
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("all");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
- 
+
   const dateFilteredOrders = useMemo(() => {
     return orders.filter((o) => {
       if (dateFilter === "all") return true;
@@ -874,7 +826,7 @@ export default function SalesOrders() {
       return true;
     });
   }, [orders, dateFilter, customStart, customEnd]);
- 
+
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: dateFilteredOrders.length };
     STATUSES.forEach((s) => {
@@ -882,7 +834,7 @@ export default function SalesOrders() {
     });
     return c;
   }, [dateFilteredOrders]);
- 
+
   const rows = dateFilteredOrders
     .filter((o) => {
       if (statusTab !== "all" && o.status !== statusTab) return false;
@@ -907,7 +859,7 @@ export default function SalesOrders() {
       );
     })
     .sort((a, b) => b.createdAt - a.createdAt);
- 
+
   const { statTotalOrders, statRevenue, statProfit } = useMemo(() => {
     const totalOrders = dateFilteredOrders.length;
     const eligibleOrders = dateFilteredOrders.filter((o) => {
@@ -968,11 +920,10 @@ export default function SalesOrders() {
               <button
                 key={mode}
                 onClick={() => setDateFilter(mode)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                  dateFilter === mode
-                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
-                    : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                }`}
+                className={`rounded-md px-3 py-1 text-xs font-medium transition ${dateFilter === mode
+                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
+                  : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                  }`}
               >
                 {mode === "all" ? "All Time" : mode === "today" ? "Today" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
               </button>
@@ -1048,19 +999,17 @@ export default function SalesOrders() {
             <button
               key={s}
               onClick={() => setStatusTab(s)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
-                isActive
-                  ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
-                  : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-              }`}
+              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${isActive
+                ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
+                : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+                }`}
             >
               <span>{s === "all" ? "All" : s}</span>
               <span
-                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-                  isActive
-                    ? "bg-white/20 text-white"
-                    : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-                }`}
+                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive
+                  ? "bg-white/20 text-white"
+                  : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                  }`}
               >
                 {count}
               </span>
@@ -1076,11 +1025,10 @@ export default function SalesOrders() {
             <button
               key={pStatus}
               onClick={() => setPaymentFilter(pStatus)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
-                isActive
-                  ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
-                  : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-              }`}
+              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${isActive
+                ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
+                : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+                }`}
             >
               <span>{pStatus === "all" ? "All Payments" : pStatus}</span>
             </button>
@@ -1117,8 +1065,22 @@ export default function SalesOrders() {
               <Card className="p-4">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="w-24">
-                    <div className="font-semibold text-slate-900 dark:text-white">{o.orderNo}</div>
-                    <div className="text-xs text-slate-400">{fmtDateTime(o.createdAt)}</div>
+                    <div className="font-semibold text-slate-900 dark:text-white flex flex-col gap-0.5">
+                      <span>{o.orderNo}</span>
+                      {o.isAdminDeleted && (
+                        <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider">
+                          (Deleted from Admin)
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-400 space-y-0.5 mt-1">
+                      <div>Pl: {fmtDateTime(o.createdAt)}</div>
+                      {o.updatedAt && Math.abs(o.updatedAt - o.createdAt) > 60000 && (
+                        <div className="text-indigo-600 dark:text-indigo-400 font-medium" title="Last Updated">
+                          Up: {fmtDateTime(o.updatedAt)}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">
@@ -1152,7 +1114,7 @@ export default function SalesOrders() {
                     <div>Bal: <span className="font-semibold tabular-nums text-rose-600 dark:text-rose-400">{inr(balanceAmount)}</span></div>
                     <div className="text-[10px] text-emerald-600">Profit: +{inr(o.profit)}</div>
                   </div>
-                  <Select value={o.status} onChange={(e) => changeStatus(o, e.target.value as SalesStatus)} className="w-auto" onClick={(e) => e.stopPropagation()}>
+                  <Select value={o.status} onChange={(e) => changeStatus(o, e.target.value as SalesStatus)} className="w-auto cursor-not-allowed opacity-75" onClick={(e) => e.stopPropagation()} disabled>
                     {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                   </Select>
                   <Button variant="secondary" onClick={(e) => { e.stopPropagation(); navigate(`/orders/${o.id}`); }}><Eye className="h-4 w-4" /> Details</Button>

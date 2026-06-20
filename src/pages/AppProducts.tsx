@@ -4,6 +4,7 @@ import { Package, Search, Plus, ChevronDown, ChevronRight, Trash2, Pencil, FileD
 import toast from "react-hot-toast";
 import { useDataStore } from "@/store/dataStore";
 import { saveInventoryProduct, deleteInventoryProduct, updateProductField, updateInventoryProductField, updateVariantField } from "@/services/data";
+import { deleteToBin } from "@/services/recycleBin";
 import { Button, Card, PageHeader, Input } from "@/components/ui/primitives";
 import { Modal } from "@/components/ui/Modal";
 import { uid, exportCsv } from "@/lib/utils";
@@ -14,6 +15,7 @@ import {
   mergeProductWithOverrides,
   type ProductOverride
 } from "@/services/productOverrides";
+import { mergeOrders } from "@/services/orderMerger";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyRecord = Record<string, any>;
@@ -448,10 +450,13 @@ export default function AppProductsPage() {
     setSearchParams(newParams, { replace: true });
   };
 
-  const adminProducts = useDataStore((state: any) => state.adminProducts || []) as AnyRecord[];
-  const inventoryProducts = useDataStore((state: any) => state.inventoryProducts || []) as AnyRecord[];
-  const adminOrders = useDataStore((state: any) => state.adminOrders || []) as AnyRecord[];
-  const salesOrders = useDataStore((state: any) => state.salesOrders || []) as AnyRecord[];
+  const rawAdminProducts = useDataStore((state: any) => state.adminProducts || []) as AnyRecord[];
+  const adminProducts = useMemo(() => rawAdminProducts.filter((p: any) => p.isDeleted !== true), [rawAdminProducts]);
+  const rawInventoryProducts = useDataStore((state: any) => state.inventoryProducts || []) as AnyRecord[];
+  const inventoryProducts = useMemo(() => rawInventoryProducts.filter((p: any) => p.isDeleted !== true), [rawInventoryProducts]);
+  const rawAdminOrders = useDataStore((state: any) => state.adminOrders || []) as AnyRecord[];
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
+  const rawSalesOrders = useDataStore((state: any) => state.salesOrders || []) as AnyRecord[];
 
   // Merge admin products with localStorage overrides
   const mergedAdminProducts = useMemo(() => getMergedProducts(adminProducts), [adminProducts]);
@@ -471,19 +476,13 @@ export default function AppProductsPage() {
     let yearQty = 0;
     let hasAnySales = false;
 
-    const filterAndSum = (o: any) => {
+    // Use merged orders to prevent duplicate counts and handle overriding
+    const mergedOrders = mergeOrders(adminOrders, rawSalesOrders, [], []);
+
+    mergedOrders.forEach((o: any) => {
       if (o.status === "Cancelled") return;
 
-      let orderDateMs = now;
-      if (o.createdAt) {
-        if (typeof o.createdAt.toDate === "function") {
-          orderDateMs = o.createdAt.toDate().getTime();
-        } else if (typeof o.createdAt === "number") {
-          orderDateMs = o.createdAt;
-        } else {
-          orderDateMs = new Date(o.createdAt).getTime();
-        }
-      }
+      const orderDateMs = o.createdAt;
 
       const rawLines = Array.isArray(o.lines) ? o.lines : Array.isArray(o.items) ? o.items : [];
       rawLines.forEach((l: any) => {
@@ -496,10 +495,7 @@ export default function AppProductsPage() {
           if (orderDateMs >= yearAgo) yearQty += qty;
         }
       });
-    };
-
-    (salesOrders || []).forEach(filterAndSum);
-    (adminOrders || []).forEach(filterAndSum);
+    });
 
     return {
       week: hasAnySales ? weekQty : "No sales yet",
@@ -507,7 +503,7 @@ export default function AppProductsPage() {
       year: hasAnySales ? yearQty : "No sales yet",
       hasAnySales
     };
-  }, [selectedDetailProduct, salesOrders, adminOrders]);
+  }, [selectedDetailProduct, rawSalesOrders, adminOrders]);
 
   const categories = useMemo(() => {
     const cats = products.map((p) => p.category || p.categoryName || "").filter(Boolean);
@@ -559,9 +555,16 @@ export default function AppProductsPage() {
     setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete this manual product?")) return;
+    const product = inventoryProducts.find((p) => p.id === id);
+    const name = product?.name || id;
+    if (!confirm(`Delete manual product "${name}"? This item can be restored from the Recycle Bin.`)) return;
     setDeletingId(id);
-    try { await deleteInventoryProduct(id); } finally { setDeletingId(null); }
+    try {
+      await deleteToBin("inventory_product", id, name, product, "inventoryProducts");
+      toast.success("Product moved to Recycle Bin");
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const openModal = (product: AnyRecord | null = null) => {

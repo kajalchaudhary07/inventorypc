@@ -381,8 +381,11 @@ function SalonDetailsModal({ salon, orders, onClose }: { salon: Salon; orders: a
 const SALON_STATUSES = ["Active", "Inactive", "Pending Approval", "Suspended", "Closed", "Archived"];
 
 export default function Salons() {
-  const { salons, salesOrders } = useDataStore();
-  const adminCustomers = useDataStore((s: any) => s.adminCustomers || []);
+  const { salons: rawSalons, salesOrders: rawSalesOrders } = useDataStore();
+  const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
+  const salesOrders = useMemo(() => rawSalesOrders.filter((o: any) => o.isDeleted !== true && o.isPermanentlyDeleted !== true), [rawSalesOrders]);
+  const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Salon | null>(null);
   const [detailsSalon, setDetailsSalon] = useState<Salon | null>(null);

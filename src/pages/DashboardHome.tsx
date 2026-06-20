@@ -17,6 +17,7 @@ import {
   topProducts, salonsRanked, movementByDay,
 } from "@/lib/calc";
 import { getMergedProducts } from "@/services/productOverrides";
+import { mergeOrders } from "@/services/orderMerger";
 
 const palette = ["#0f172a", "#6366f1", "#10b981", "#f59e0b", "#f43f5e"];
 
@@ -37,10 +38,19 @@ const tip = {
 
 export default function DashboardHome() {
   const navigate = useNavigate();
-  const { products: invProducts, salesOrders: invSalesOrders, stockMovements, purchaseOrders } = useDataStore();
-  const adminProducts = useDataStore((s: any) => s.adminProducts || []);
-  const inventoryProducts = useDataStore((s: any) => s.inventoryProducts || []);
-  const adminOrders = useDataStore((s: any) => s.adminOrders || []);
+  const { products: rawInvProducts, salesOrders: rawInvSalesOrders, stockMovements, purchaseOrders: rawPurchaseOrders, salons: rawSalons } = useDataStore();
+  const rawAdminProducts = useDataStore((s: any) => s.adminProducts || []);
+  const rawInventoryProducts = useDataStore((s: any) => s.inventoryProducts || []);
+  const rawAdminOrders = useDataStore((s: any) => s.adminOrders || []);
+  const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
+
+  const invProducts = useMemo(() => rawInvProducts.filter((p: any) => p.isDeleted !== true), [rawInvProducts]);
+  const adminProducts = useMemo(() => rawAdminProducts.filter((p: any) => p.isDeleted !== true), [rawAdminProducts]);
+  const inventoryProducts = useMemo(() => rawInventoryProducts.filter((p: any) => p.isDeleted !== true), [rawInventoryProducts]);
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
+  const dbSalons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
+  const purchaseOrders = useMemo(() => rawPurchaseOrders.filter((po: any) => po.isDeleted !== true), [rawPurchaseOrders]);
 
   const mergedAdminProducts = useMemo(() => getMergedProducts(adminProducts), [adminProducts]);
 
@@ -53,47 +63,10 @@ export default function DashboardHome() {
     return Array.from(map.values());
   }, [invProducts, mergedAdminProducts, inventoryProducts]);
 
-  // Normalize admin order timestamp to ms
-  const toMs = (ts: any): number => {
-    if (!ts) return 0;
-    if (typeof ts?.toDate === "function") return ts.toDate().getTime();
-    if (ts instanceof Date) return ts.getTime();
-    if (typeof ts === "number") return ts;
-    const p = new Date(ts as string);
-    return Number.isNaN(p.getTime()) ? 0 : p.getTime();
-  };
-
-  // Merge inventory salesOrders + adminOrders
+  // Merge inventory salesOrders + adminOrders using the orderMerger service.
   const salesOrders = useMemo(() => {
-    const map = new Map<string, any>();
-    invSalesOrders.forEach((o: any) => map.set(o.id, o));
-    adminOrders.forEach((o: any) => {
-      if (!map.has(o.id)) {
-        const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
-        map.set(o.id, {
-          ...o,
-          // normalize lines so calc functions (topProducts etc.) work
-          lines: rawItems.map((item: any) => ({
-            productId: item.productId || item.id || "",
-            name: item.name || item.title || item.productName || "",
-            sku: item.sku || item.productId || "",
-            qty: Number(item.quantity ?? item.qty ?? 1) || 1,
-            price: Number(item.price ?? item.unitPrice ?? 0),
-            cost: Number(item.cost ?? 0),
-            gstRate: Number(item.gstRate ?? 0),
-            discount: Number(item.discount ?? 0),
-          })),
-          total: Number(o.total ?? o.amount ?? o.totalAmount ?? o.grandTotal ?? o.payableAmount ?? 0),
-          profit: Number(o.profit ?? 0),
-          createdAt: toMs(o.createdAt || o.orderDate || o.date),
-          status: o.status || o.orderStatus || "Pending",
-          salonId: o.salonId || o.customerId || o.userId || o.uid || "",
-          salonName: o.salonName || o.contactDetails?.receiverName || o.customerName || o.customer?.name || "",
-        });
-      }
-    });
-    return Array.from(map.values());
-  }, [invSalesOrders, adminOrders]);
+    return mergeOrders(adminOrders, rawInvSalesOrders, dbSalons, adminCustomers);
+  }, [adminOrders, rawInvSalesOrders, dbSalons, adminCustomers]);
 
   const m = useMemo(() => {
     const active = products.filter((p) => p.status !== "archived");

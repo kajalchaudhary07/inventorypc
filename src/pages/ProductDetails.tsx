@@ -7,13 +7,28 @@ import { useDataStore } from "@/store/dataStore";
 import { inr, num, fmtDateTime } from "@/lib/utils";
 import { available, margin, profitPerUnit, invValue } from "@/lib/calc";
 import { getMergedProducts } from "@/services/productOverrides";
+import { mergeOrders } from "@/services/orderMerger";
 
 export default function ProductDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { products, stockMovements, salesOrders, purchaseOrders } = useDataStore();
-  const adminProducts = useDataStore((s: any) => s.adminProducts || []);
-  const inventoryProducts = useDataStore((s: any) => s.inventoryProducts || []);
+  const { products: rawProducts, stockMovements, salesOrders: rawSalesOrders, purchaseOrders: rawPurchaseOrders, salons: rawSalons } = useDataStore();
+  const rawAdminProducts = useDataStore((s: any) => s.adminProducts || []);
+  const rawInventoryProducts = useDataStore((s: any) => s.inventoryProducts || []);
+  const rawAdminOrders = useDataStore((s: any) => s.adminOrders || []);
+  const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
+
+  const products = useMemo(() => rawProducts.filter((p: any) => p.isDeleted !== true), [rawProducts]);
+  const purchaseOrders = useMemo(() => rawPurchaseOrders.filter((po: any) => po.isDeleted !== true), [rawPurchaseOrders]);
+  const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
+  const adminProducts = useMemo(() => rawAdminProducts.filter((p: any) => p.isDeleted !== true), [rawAdminProducts]);
+  const inventoryProducts = useMemo(() => rawInventoryProducts.filter((p: any) => p.isDeleted !== true), [rawInventoryProducts]);
+
+  const salesOrders = useMemo(() => {
+    return mergeOrders(adminOrders, rawSalesOrders, salons, adminCustomers);
+  }, [adminOrders, rawSalesOrders, salons, adminCustomers]);
 
   const invProduct = products.find((x) => x.id === id) || inventoryProducts.find((x: any) => x.id === id);
   const mergedAdminProducts = useMemo(() => getMergedProducts(adminProducts) as any[], [adminProducts]);
@@ -24,8 +39,8 @@ export default function ProductDetails() {
     if (!invProduct) return null;
     const moves = stockMovements.filter((m) => m.productId === invProduct.id).sort((a, b) => b.createdAt - a.createdAt);
     const sales = salesOrders
-      .filter((o) => o.status !== "Cancelled" && o.lines.some((l) => l.productId === invProduct.id))
-      .map((o) => ({ order: o, line: o.lines.find((l) => l.productId === invProduct.id)! }))
+      .filter((o) => o.status !== "Cancelled" && o.lines.some((l: any) => l.productId === invProduct.id))
+      .map((o) => ({ order: o, line: o.lines.find((l: any) => l.productId === invProduct.id)! }))
       .sort((a, b) => b.order.createdAt - a.order.createdAt);
     const purchases = purchaseOrders.filter((po) => po.lines.some((l) => l.productId === invProduct.id));
     const totalSold = sales.reduce((s, x) => s + x.line.qty, 0);
