@@ -74,7 +74,7 @@ export function cancelledCount(orders: SalesOrder[]) {
 }
 
 export function deliverySuccessRate(orders: SalesOrder[]) {
-  const attempted = orders.filter((o) => o.status !== "Pending" && o.status !== "Packed");
+  const attempted = orders.filter((o) => !["Pending", "Placed", "Confirmed", "Processing", "Packed"].includes(o.status));
   if (!attempted.length) return 0;
   const delivered = orders.filter((o) => o.status === "Delivered").length;
   return (delivered / attempted.length) * 100;

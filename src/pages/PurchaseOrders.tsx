@@ -93,10 +93,35 @@ function CreatePO({ open, onClose }: { open: boolean; onClose: () => void }) {
   const matchingProducts = useMemo(() => {
     const q = productSearch.trim().toLowerCase();
     if (!q) return [];
-    return products.filter((p) => 
-      p.name.toLowerCase().includes(q) || 
-      p.sku.toLowerCase().includes(q)
-    );
+
+    const tokens = q.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return [];
+
+    return products.filter((p) => {
+      if (p.status === "archived") return false;
+
+      const name = (p.name || "").toLowerCase();
+      const sku = (p.sku || "").toLowerCase();
+      const brand = (p.brand || "").toLowerCase();
+      const category = (p.category || p.categoryName || "").toLowerCase();
+
+      return tokens.every((token) => {
+        const inMain = name.includes(token) || 
+                       sku.includes(token) || 
+                       brand.includes(token) || 
+                       category.includes(token);
+        if (inMain) return true;
+
+        if (p.variants && Array.isArray(p.variants)) {
+          return p.variants.some((v: any) => {
+            const vName = (v.name || v.shadeName || v.value || "").toLowerCase();
+            const vSku = (v.sku || "").toLowerCase();
+            return vName.includes(token) || vSku.includes(token);
+          });
+        }
+        return false;
+      });
+    });
   }, [products, productSearch]);
 
   return (
@@ -161,7 +186,19 @@ function CreatePO({ open, onClose }: { open: boolean; onClose: () => void }) {
                     }}
                     className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-700"
                   >
-                    <span className="font-medium text-slate-900 dark:text-white">{p.name}</span>
+                    <span>
+                      <span className="font-medium text-slate-900 dark:text-white">{p.name}</span>
+                      {(p.brand || p.category || p.categoryName) && (
+                        <span className="ml-2 text-xs text-slate-400 font-normal">
+                          ({[p.brand, p.category || p.categoryName].filter(Boolean).join(" · ")})
+                        </span>
+                      )}
+                      {p.variants && p.variants.length > 0 && (
+                        <span className="ml-2 text-[10px] font-medium text-blue-600">
+                          ({p.variants.length} variant{p.variants.length > 1 ? "s" : ""})
+                        </span>
+                      )}
+                    </span>
                     <span className="text-xs text-slate-400">SKU: {p.sku} · Cost: {inr(p.costPrice)}</span>
                   </button>
                 ))}

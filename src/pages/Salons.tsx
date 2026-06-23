@@ -15,6 +15,7 @@ import { deleteDoc, doc, updateDoc } from "firebase/firestore";
 import { deleteToBin } from "@/services/recycleBin";
 import { inr, num, uid, getOrderPaymentInfo } from "@/lib/utils";
 import type { Salon } from "@/types";
+import { mergeOrders } from "@/services/orderMerger";
 
 const getField = (obj: any, keys: string[]) => {
   for (const key of keys) {
@@ -73,30 +74,30 @@ function SalonForm({ open, onClose, editing }: { open: boolean; onClose: () => v
   const { register, handleSubmit, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
     values: editing
-      ? { 
-          name: editing.name, 
-          ownerName: editing.ownerName, 
-          phone: editing.phone, 
-          email: editing.email || "",
-          gstin: editing.gstin || "", 
-          address: editing.address || "", 
-          region: editing.region || "", 
-          branchNo: editing.branchNo || "", 
-          description: editing.description || "", 
-          status: initialStatus 
-        }
-      : { 
-          name: "", 
-          ownerName: "", 
-          phone: "", 
-          email: "",
-          gstin: "", 
-          address: "", 
-          region: "", 
-          branchNo: "", 
-          description: "", 
-          status: "Active" 
-        },
+      ? {
+        name: editing.name,
+        ownerName: editing.ownerName,
+        phone: editing.phone,
+        email: editing.email || "",
+        gstin: editing.gstin || "",
+        address: editing.address || "",
+        region: editing.region || "",
+        branchNo: editing.branchNo || "",
+        description: editing.description || "",
+        status: initialStatus
+      }
+      : {
+        name: "",
+        ownerName: "",
+        phone: "",
+        email: "",
+        gstin: "",
+        address: "",
+        region: "",
+        branchNo: "",
+        description: "",
+        status: "Active"
+      },
   });
 
   const onSubmit = async (v: FormValues) => {
@@ -275,11 +276,10 @@ function SalonDetailsModal({ salon, orders, onClose }: { salon: Salon; orders: a
               <button
                 key={mode}
                 onClick={() => setDateFilter(mode)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                  dateFilter === mode
+                className={`rounded-md px-3 py-1 text-xs font-medium transition ${dateFilter === mode
                     ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
                     : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                }`}
+                  }`}
               >
                 {mode === "all" ? "All Time" : mode === "30days" ? "30 Days" : mode === "90days" ? "90 Days" : "Custom"}
               </button>
@@ -325,18 +325,17 @@ function SalonDetailsModal({ salon, orders, onClose }: { salon: Salon; orders: a
         <div className="space-y-3">
           <div className="flex items-center justify-between border-b border-slate-200 pb-2 dark:border-slate-700">
             <h3 className="font-semibold text-slate-900 dark:text-white">Order Frequency</h3>
-            
+
             {/* Tabs for Week/Month/Year */}
             <div className="flex rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800">
               {(["week", "month", "year"] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setBreakdownTab(tab)}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                    breakdownTab === tab
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${breakdownTab === tab
                       ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
                       : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                  }`}
+                    }`}
                 >
                   {tab === "week" ? "Weekly" : tab === "month" ? "Monthly" : "Yearly"}
                 </button>
@@ -382,8 +381,9 @@ const SALON_STATUSES = ["Active", "Inactive", "Pending Approval", "Suspended", "
 
 export default function Salons() {
   const { salons: rawSalons, salesOrders: rawSalesOrders } = useDataStore();
+  const rawAdminOrders = useDataStore((s: any) => s.adminOrders || []);
   const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
-  const salesOrders = useMemo(() => rawSalesOrders.filter((o: any) => o.isDeleted !== true && o.isPermanentlyDeleted !== true), [rawSalesOrders]);
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
   const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
   const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
   const [open, setOpen] = useState(false);
@@ -395,6 +395,10 @@ export default function Salons() {
   const [filter, setFilter] = useState("all");
   const [localVersion, setLocalVersion] = useState(0);
 
+  const allOrders = useMemo(() => {
+    return mergeOrders(adminOrders, rawSalesOrders, salons, adminCustomers);
+  }, [adminOrders, rawSalesOrders, salons, adminCustomers, localVersion]);
+
   const getSalonStatus = (salon: Salon) => {
     // Priority 1: Firestore doc field
     if (salon.status) return salon.status;
@@ -405,7 +409,7 @@ export default function Salons() {
   };
 
   const enriched = useMemo(() => salons.map((s) => {
-    const orders = salesOrders.filter((o) => o.salonId === s.id && o.status !== "Cancelled");
+    const orders = allOrders.filter((o) => o.salonId === s.id && o.status !== "Cancelled");
     const status = getSalonStatus(s);
 
     // Outstanding Balance = Total Bill Amount of all orders for this salon minus Total Amount Paid across all orders for this salon
@@ -416,15 +420,15 @@ export default function Salons() {
     }, 0);
     const outstanding = Math.max(0, totalBill - totalPaid);
 
-    return { 
-      salon: { ...s, status, outstanding }, 
-      revenue: totalBill, 
-      profit: orders.reduce((a, o) => a + o.profit, 0), 
+    return {
+      salon: { ...s, status, outstanding },
+      revenue: totalBill,
+      profit: orders.reduce((a, o) => a + o.profit, 0),
       orders: orders.length,
       status,
       outstanding
     };
-  }), [salons, salesOrders, localVersion]);
+  }), [salons, allOrders, localVersion]);
 
   const filteredRows = useMemo(() => {
     return enriched.filter((e) => filter === "all" || e.status === filter);
@@ -445,8 +449,8 @@ export default function Salons() {
   };
 
   const columns: ColumnDef<(typeof enriched)[number], unknown>[] = [
-    { 
-      header: "Salon", 
+    {
+      header: "Salon",
       accessorFn: (e) => {
         const s = e.salon;
         const name = extractName(s) || "";
@@ -454,7 +458,7 @@ export default function Salons() {
         const phone = extractPhone(s) || "";
         const email = extractEmail(s) || "";
         return `${name} ${owner} ${phone} ${email}`;
-      }, 
+      },
       cell: ({ row }) => {
         const s = row.original.salon;
         const name = extractName(s) || "-";
@@ -473,9 +477,10 @@ export default function Salons() {
             </div>
           </div>
         );
-      } 
+      }
     },
-    { header: "Status", accessorFn: (e) => e.status, cell: ({ getValue }) => {
+    {
+      header: "Status", accessorFn: (e) => e.status, cell: ({ getValue }) => {
         const s = getValue() as string;
         const color = {
           "Active": "emerald",
@@ -492,20 +497,20 @@ export default function Salons() {
     { header: "Revenue", accessorKey: "revenue", cell: ({ getValue }) => <span className="font-semibold tabular-nums">{inr(getValue() as number)}</span> },
     { header: "Profit", accessorKey: "profit", cell: ({ getValue }) => <span className="font-semibold tabular-nums text-emerald-600">{inr(getValue() as number)}</span> },
     { header: "Outstanding", accessorFn: (e) => e.salon.outstanding, cell: ({ getValue }) => { const v = getValue() as number; return v > 0 ? <Badge color="rose">{inr(v)}</Badge> : <Badge color="emerald">Clear</Badge>; } },
-    { 
-      header: "", 
-      id: "actions", 
+    {
+      header: "",
+      id: "actions",
       cell: ({ row }) => (
         <div className="flex items-center gap-1">
-          <button 
-            onClick={() => { setEditing(row.original.salon); setOpen(true); }} 
+          <button
+            onClick={() => { setEditing(row.original.salon); setOpen(true); }}
             className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white transition"
             title="Edit Salon"
           >
             <Pencil className="h-4 w-4" />
           </button>
-          <button 
-            onClick={() => handleDeleteSalon(row.original.salon)} 
+          <button
+            onClick={() => handleDeleteSalon(row.original.salon)}
             className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950 dark:hover:text-rose-400 transition"
             title="Delete Salon"
           >
@@ -563,19 +568,17 @@ export default function Salons() {
             <button
               key={s}
               onClick={() => setFilter(s)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
-                isActive
+              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${isActive
                   ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
                   : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-              }`}
+                }`}
             >
               <span>{s === "all" ? "All" : s}</span>
               <span
-                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-                  isActive
+                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive
                     ? "bg-white/20 text-white"
                     : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-                }`}
+                  }`}
               >
                 {count}
               </span>
@@ -612,19 +615,28 @@ export default function Salons() {
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
+                <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Orders</th>
+                <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Revenue</th>
+                <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Profit</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Joined</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {filteredCustomers.length === 0 ? (
-                <tr><td colSpan={4} className="py-10 text-center text-slate-400">No customers found.</td></tr>
+                <tr><td colSpan={7} className="py-10 text-center text-slate-400">No customers found.</td></tr>
               ) : (
                 filteredCustomers.map((c: any) => {
                   const name = extractOwnerName(c) || getField(c, ["name", "displayName"]) || "-";
                   const email = extractEmail(c) || "-";
                   const phone = extractPhone(c) || "-";
                   const salonName = getCustomerSalonName(c, salons) || extractSalonName(c) || "";
+
+                  const cOrders = allOrders.filter((o) => (o.salonId === c.id || o.customerId === c.id || o.userId === c.id || o.uid === c.id) && o.status !== "Cancelled");
+                  const totalOrders = cOrders.length;
+                  const revenue = cOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+                  const profit = cOrders.reduce((sum, o) => sum + (o.profit || 0), 0);
+
                   return (
                     <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                       <td className="px-4 py-3">
@@ -639,14 +651,16 @@ export default function Salons() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                          (c.status || "active") === "active"
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${(c.status || "active") === "active"
                             ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
                             : "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
-                        }`}>
+                          }`}>
                           {c.status || "active"}
                         </span>
                       </td>
+                      <td className="px-4 py-3 text-right tabular-nums">{num(totalOrders)}</td>
+                      <td className="px-4 py-3 text-right font-semibold tabular-nums">{inr(revenue)}</td>
+                      <td className="px-4 py-3 text-right font-semibold tabular-nums text-emerald-600">{inr(profit)}</td>
                       <td className="px-4 py-3 text-slate-500">
                         {c.createdAt ? new Date(typeof c.createdAt?.toDate === "function" ? c.createdAt.toDate() : c.createdAt).toLocaleDateString("en-IN") : "-"}
                       </td>
@@ -686,16 +700,17 @@ export default function Salons() {
 
       <SalonForm open={open} onClose={() => { setOpen(false); setLocalVersion((v) => v + 1); }} editing={editing} />
       {detailsSalon && (
-        <SalonDetailsModal 
-          salon={detailsSalon} 
-          orders={salesOrders.filter((o) => o.salonId === detailsSalon.id && o.status !== "Cancelled")} 
-          onClose={() => setDetailsSalon(null)} 
+        <SalonDetailsModal
+          salon={detailsSalon}
+          orders={allOrders.filter((o) => o.salonId === detailsSalon.id && o.status !== "Cancelled")}
+          onClose={() => setDetailsSalon(null)}
         />
       )}
       {detailsCustomer && (
         <AppCustomerDetailsModal
           customer={detailsCustomer}
           salonName={getCustomerSalonName(detailsCustomer, salons)}
+          orders={allOrders.filter((o) => (o.salonId === detailsCustomer.id || o.customerId === detailsCustomer.id || o.userId === detailsCustomer.id || o.uid === detailsCustomer.id) && o.status !== "Cancelled")}
           onClose={() => setDetailsCustomer(null)}
         />
       )}
@@ -710,8 +725,12 @@ export default function Salons() {
   );
 }
 
-function AppCustomerDetailsModal({ customer, salonName, onClose }: { customer: any; salonName: string; onClose: () => void }) {
+function AppCustomerDetailsModal({ customer, salonName, orders, onClose }: { customer: any; salonName: string; orders: any[]; onClose: () => void }) {
   const joinedDate = customer.createdAt ? new Date(typeof customer.createdAt?.toDate === "function" ? customer.createdAt.toDate() : customer.createdAt).toLocaleString("en-IN") : "—";
+  const totalOrders = orders.length;
+  const totalRevenue = orders.reduce((sum, o) => sum + (o.total || 0), 0);
+  const totalProfit = orders.reduce((sum, o) => sum + (o.profit || 0), 0);
+
   return (
     <Modal open={!!customer} onClose={onClose} title={`App Customer Details: ${customer.name || customer.displayName || "—"}`}
       footer={<Button onClick={onClose}>Close</Button>}>
@@ -739,6 +758,18 @@ function AppCustomerDetailsModal({ customer, salonName, onClose }: { customer: a
         <div>
           <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Joined</span>
           <span className="font-semibold text-slate-900 dark:text-white">{joinedDate}</span>
+        </div>
+        <div>
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Total Orders</span>
+          <span className="font-semibold text-slate-900 dark:text-white">{totalOrders}</span>
+        </div>
+        <div>
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Total Revenue</span>
+          <span className="font-semibold text-slate-900 dark:text-white">{inr(totalRevenue)}</span>
+        </div>
+        <div>
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Total Profit</span>
+          <span className="font-semibold text-emerald-600 dark:text-emerald-400">{inr(totalProfit)}</span>
         </div>
         {customer.uid && (
           <div>

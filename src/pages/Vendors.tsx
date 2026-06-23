@@ -117,7 +117,7 @@ export default function Vendors() {
     return vendors.map((v) => {
       const pos = purchaseOrders.filter((p) => p.vendorId === v.id && p.status !== "Cancelled");
       const status = getVendorStatus(v);
-      
+
       const totalPurchased = pos.reduce((a, p) => a + p.total, 0);
       const totalPaid = pos.reduce((a, p) => {
         // Priority 1: Firestore-persisted field
@@ -159,7 +159,8 @@ export default function Vendors() {
   const columns: ColumnDef<(typeof enriched)[number], unknown>[] = [
     { header: "Vendor", accessorFn: (e) => e.vendor.name, cell: ({ row }) => (<div><div className="font-medium text-slate-900 dark:text-white">{row.original.vendor.name}</div><div className="text-xs text-slate-400">{row.original.vendor.contactName} · {row.original.vendor.phone}</div></div>) },
     { header: "GSTIN", accessorFn: (e) => e.vendor.gstin || "—", cell: ({ getValue }) => <span className="text-slate-500">{getValue() as string}</span> },
-    { header: "Status", accessorFn: (e) => e.status, cell: ({ getValue }) => {
+    {
+      header: "Status", accessorFn: (e) => e.status, cell: ({ getValue }) => {
         const s = getValue() as string;
         const color = {
           "Active": "emerald",
@@ -175,27 +176,27 @@ export default function Vendors() {
     { header: "POs", accessorKey: "orders", cell: ({ getValue }) => <span className="tabular-nums">{num(getValue() as number)}</span> },
     { header: "Purchased", accessorKey: "purchased", cell: ({ getValue }) => <span className="font-semibold tabular-nums">{inr(getValue() as number)}</span> },
     { header: "Outstanding", accessorFn: (e) => e.vendor.outstanding, cell: ({ getValue }) => { const v = getValue() as number; return v > 0 ? <Badge color="rose">{inr(v)}</Badge> : <Badge color="emerald">Clear</Badge>; } },
-    { 
-      header: "", 
-      id: "actions", 
+    {
+      header: "",
+      id: "actions",
       cell: ({ row }) => (
         <div className="flex items-center gap-1">
-          <button 
-            onClick={() => { setEditing(row.original.vendor); setOpen(true); }} 
+          <button
+            onClick={() => { setEditing(row.original.vendor); setOpen(true); }}
             className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
             title="Edit Vendor"
           >
             <Pencil className="h-4 w-4" />
           </button>
-          <button 
-            onClick={() => handleDeleteVendor(row.original.vendor)} 
+          <button
+            onClick={() => handleDeleteVendor(row.original.vendor)}
             className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-950 dark:hover:text-rose-400"
             title="Delete Vendor"
           >
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
-      ) 
+      )
     },
   ];
 
@@ -231,19 +232,17 @@ export default function Vendors() {
                   <button
                     key={s}
                     onClick={() => setFilter(s)}
-                    className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1 ${
-                      isActive
+                    className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1 ${isActive
                         ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
                         : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-                    }`}
+                      }`}
                   >
                     <span>{s === "all" ? "All" : s}</span>
                     <span
-                      className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
-                        isActive
+                      className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${isActive
                           ? "bg-white/20 text-white"
                           : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-                      }`}
+                        }`}
                     >
                       {count}
                     </span>

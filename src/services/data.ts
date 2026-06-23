@@ -399,7 +399,33 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
   if (status === "Returned" && !order.returnedAt) stamp.returnedAt = now;
 
   if (isFirebaseConfigured && db) {
-    await setDoc(doc(db, "salesOrders", order.id), { status, ...stamp }, { merge: true });
+    await setDoc(doc(db, "salesOrders", order.id), { inventoryStatus: status, ...stamp }, { merge: true });
+
+    // Sync to 'orders' collection if it is an app order (channel is 'app' or starts with 'PC')
+    const channel = order.channel || (order as any).source || "manual";
+    const isAppOrder = channel === "app" || 
+                       String(order.orderNo || "").startsWith("PC") || 
+                       String(order.id || "").startsWith("PC");
+    if (isAppOrder) {
+      try {
+        await updateDoc(doc(db, "orders", order.id), {
+          status: status,
+          orderStatus: status,
+          updatedAt: now,
+        });
+      } catch (err) {
+        console.warn(`Failed to update status in 'orders' via updateDoc, trying setDoc:`, err);
+        try {
+          await setDoc(doc(db, "orders", order.id), {
+            status: status,
+            orderStatus: status,
+            updatedAt: now,
+          }, { merge: true });
+        } catch (err2) {
+          console.error(`Failed to update status in 'orders' collection:`, err2);
+        }
+      }
+    }
   }
 
   // Update the local store so UI reflects immediately
@@ -407,9 +433,21 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
   const salesOrders = state.salesOrders || [];
   const exists = salesOrders.some((o: any) => o.id === order.id);
   const updatedSO = exists
-    ? salesOrders.map((o: any) => o.id === order.id ? { ...o, status, ...stamp } : o)
-    : [{ id: order.id, status, ...stamp }, ...salesOrders];
+    ? salesOrders.map((o: any) => o.id === order.id ? { ...o, status, inventoryStatus: status, ...stamp } : o)
+    : [{ id: order.id, status, inventoryStatus: status, ...stamp }, ...salesOrders];
   state.setCollection("salesOrders", updatedSO);
+
+  const channel = order.channel || (order as any).source || "manual";
+  const isAppOrder = channel === "app" || 
+                     String(order.orderNo || "").startsWith("PC") || 
+                     String(order.id || "").startsWith("PC");
+  if (isAppOrder) {
+    const adminOrders = state.adminOrders || [];
+    const updatedAO = adminOrders.map((o: any) =>
+      o.id === order.id ? { ...o, status, orderStatus: status, updatedAt: now } : o
+    );
+    state.setCollection("adminOrders", updatedAO);
+  }
 
 
 

@@ -282,22 +282,40 @@ export default function ManualOrderEntry() {
   const matches = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return [];
+
+    const tokens = q.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return [];
+
     return allProducts
       .filter((p: AnyRecord) => {
+        if (p.status === "archived") return false;
+
         const name = (p.name || "").toLowerCase();
         const sku = (p.sku || "").toLowerCase();
         const brand = (p.brand || "").toLowerCase();
         const category = (p.category || p.categoryName || "").toLowerCase();
         const barcode = (p.barcode || "").toLowerCase();
-        return (
-          name.includes(q) ||
-          sku.includes(q) ||
-          brand.includes(q) ||
-          category.includes(q) ||
-          barcode.includes(q)
-        );
+
+        return tokens.every((token) => {
+          const inMain = name.includes(token) ||
+                         sku.includes(token) ||
+                         brand.includes(token) ||
+                         category.includes(token) ||
+                         barcode.includes(token);
+          if (inMain) return true;
+
+          // Check if it matches in any variant
+          if (p.variants && Array.isArray(p.variants)) {
+            return p.variants.some((v: any) => {
+              const vName = (v.name || v.shadeName || v.value || "").toLowerCase();
+              const vSku = (v.sku || "").toLowerCase();
+              return vName.includes(token) || vSku.includes(token);
+            });
+          }
+          return false;
+        });
       })
-      .slice(0, 8);
+      .slice(0, 15);
   }, [search, allProducts]);
 
   const addProduct = (p: AnyRecord, variant?: AnyRecord) => {
@@ -485,11 +503,16 @@ export default function ManualOrderEntry() {
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products by name or SKU…" className="pl-9" />
               {matches.length > 0 && (
-                <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                <div className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
                   {matches.map((p: AnyRecord) => (
                     <button key={p.id} onClick={() => handleProductClick(p)} className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-700">
                       <span>
                         <span className="font-medium text-slate-900 dark:text-white">{p.name}</span>
+                        {(p.brand || p.category || p.categoryName) && (
+                          <span className="ml-2 text-xs text-slate-400">
+                            ({[p.brand, p.category || p.categoryName].filter(Boolean).join(" · ")})
+                          </span>
+                        )}
                         {p.variants?.length > 0 && (
                           <span className="ml-2 text-[10px] font-medium text-blue-600">{p.variants.length} variants</span>
                         )}

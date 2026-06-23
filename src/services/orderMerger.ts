@@ -7,6 +7,7 @@
 const toMs = (ts: any): number => {
   if (!ts) return 0;
   if (typeof ts?.toDate === "function") return ts.toDate().getTime();
+  if (ts && typeof ts === "object" && typeof ts.seconds === "number") return ts.seconds * 1000;
   if (ts instanceof Date) return ts.getTime();
   if (typeof ts === "number") return ts;
   const p = new Date(ts as string);
@@ -148,7 +149,7 @@ export const mergeOrders = (
     const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
 
     // Capitalize status & payment status
-    let rawStatus = o.status || o.orderStatus || (existing ? existing.status : "Pending");
+    let rawStatus = o.inventoryStatus || o.status || o.orderStatus || (existing ? existing.status : "Pending");
     if (typeof rawStatus === "string" && rawStatus) {
       rawStatus = rawStatus
         .split(" ")

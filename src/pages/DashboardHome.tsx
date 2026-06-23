@@ -183,7 +183,7 @@ export default function DashboardHome() {
       todaySales: valid.filter((o) => o.createdAt >= todayStart).reduce((s, o) => s + o.total, 0),
       monthRevenue: valid.filter((o) => o.createdAt >= monthStart).reduce((s, o) => s + o.total, 0),
       monthProfit: valid.filter((o) => o.createdAt >= monthStart).reduce((s, o) => s + o.profit, 0),
-      pending: salesOrders.filter((o) => o.status === "Pending" || o.status === "Packed").length,
+      pending: salesOrders.filter((o) => !["Delivered", "Cancelled", "Returned"].includes(o.status)).length,
     };
   }, [products, salesOrders]);
 

@@ -17,7 +17,18 @@ import { getMergedProducts } from "@/services/productOverrides";
 import type { ExtraCharge, OrderLine, Product, SalesOrder, SalesStatus, DetailFieldsConfig } from "@/types";
 import { mergeOrders } from "@/services/orderMerger";
 
-const STATUSES: SalesStatus[] = ["Pending", "Packed", "Delivered", "Cancelled", "Returned"];
+const STATUSES: SalesStatus[] = [
+  "Placed",
+  "Confirmed",
+  "Processing",
+  "Packed",
+  "Dispatched",
+  "Delivered",
+  "Edited",
+  "Cancelled",
+  "Returned",
+  "Pending",
+];
 
 function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: () => void }) {
   const settings = useUIStore((s) => s.settings);
@@ -206,12 +217,40 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
   const matches = search
     ? allProducts
       .filter((p) => {
+        if (p.status === "archived") return false;
+
+        const q = search.trim().toLowerCase();
+        if (!q) return false;
+
         const name = (p.name || "").toLowerCase();
         const sku = (p.sku || "").toLowerCase();
-        const q = search.trim().toLowerCase();
-        return p.status === "active" && (name.includes(q) || sku.includes(q));
+        const category = (p.category || p.categoryName || "").toLowerCase();
+        const brand = (p.brand || "").toLowerCase();
+
+        // Split the search query into tokens to match any/all keywords
+        const tokens = q.split(/\s+/).filter(Boolean);
+        if (tokens.length === 0) return false;
+
+        // Check if every token matches at least one of the fields (case-irrespective)
+        return tokens.every((token) => {
+          const inMain = name.includes(token) || 
+                         sku.includes(token) || 
+                         category.includes(token) || 
+                         brand.includes(token);
+          if (inMain) return true;
+
+          // If not matched in main, check if it matches in any variant
+          if (p.variants && Array.isArray(p.variants)) {
+            return p.variants.some((v: any) => {
+              const vName = (v.name || v.shadeName || v.value || "").toLowerCase();
+              const vSku = (v.sku || "").toLowerCase();
+              return vName.includes(token) || vSku.includes(token);
+            });
+          }
+          return false;
+        });
       })
-      .slice(0, 6)
+      .slice(0, 15)
     : [];
 
   const addCharge = () => setCharges((prev) => [...prev, { id: uid(), label: "", amount: 0 }]);
@@ -503,10 +542,22 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Add product — search name or SKU…" className="pl-9" />
               {matches.length > 0 && (
-                <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                <div className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
                   {matches.map((p) => (
                     <button key={p.id} onClick={() => handleProductClick(p)} className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-700">
-                      <span className="font-medium text-slate-900 dark:text-white">{p.name}</span>
+                      <span>
+                        <span className="font-medium text-slate-900 dark:text-white">{p.name}</span>
+                        {(p.brand || p.category || p.categoryName) && (
+                          <span className="ml-2 text-xs text-slate-400">
+                            ({[p.brand, p.category || p.categoryName].filter(Boolean).join(" · ")})
+                          </span>
+                        )}
+                        {p.variants && p.variants.length > 0 && (
+                          <span className="ml-2 text-[10px] font-medium text-blue-600">
+                            ({p.variants.length} variant{p.variants.length > 1 ? "s" : ""})
+                          </span>
+                        )}
+                      </span>
                       <span className="text-xs text-slate-400">{inr(p.sellingPrice)} · GST {p.gstRate}%</span>
                     </button>
                   ))}
@@ -921,8 +972,8 @@ export default function SalesOrders() {
                 key={mode}
                 onClick={() => setDateFilter(mode)}
                 className={`rounded-md px-3 py-1 text-xs font-medium transition ${dateFilter === mode
-                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
-                    : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
+                  : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
                   }`}
               >
                 {mode === "all" ? "All Time" : mode === "today" ? "Today" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
@@ -1000,15 +1051,15 @@ export default function SalesOrders() {
               key={s}
               onClick={() => setStatusTab(s)}
               className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${isActive
-                  ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
-                  : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+                ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
+                : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
                 }`}
             >
               <span>{s === "all" ? "All" : s}</span>
               <span
                 className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive
-                    ? "bg-white/20 text-white"
-                    : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                  ? "bg-white/20 text-white"
+                  : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
                   }`}
               >
                 {count}
@@ -1114,7 +1165,7 @@ export default function SalesOrders() {
                     <div>Bal: <span className="font-semibold tabular-nums text-rose-600 dark:text-rose-400">{inr(balanceAmount)}</span></div>
                     <div className="text-[10px] text-emerald-600">Profit: +{inr(o.profit)}</div>
                   </div>
-                  <Select value={o.status} onChange={(e) => changeStatus(o, e.target.value as SalesStatus)} className="w-auto cursor-not-allowed opacity-75" onClick={(e) => e.stopPropagation()} disabled>
+                  <Select value={o.status} onChange={(e) => changeStatus(o, e.target.value as SalesStatus)} className="w-auto cursor-pointer" onClick={(e) => e.stopPropagation()}>
                     {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                   </Select>
                   <Button variant="secondary" onClick={(e) => { e.stopPropagation(); navigate(`/orders/${o.id}`); }}><Eye className="h-4 w-4" /> Details</Button>

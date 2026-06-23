@@ -273,7 +273,7 @@ export const deletePermanently = async (id: string, type: BinItem["type"]) => {
       const currentOrder = salesOrders.find((x: any) => x.id === id);
       const channel = currentOrder?.channel || currentOrder?.source || "manual";
       const isManual = channel === "manual" || channel === "phone" || channel === "whatsapp" || String(currentOrder?.orderNo || id || "").startsWith("SO-");
-      
+
       const adminOrders = state.adminOrders || [];
       const originalExists = adminOrders.some((x: any) => x.id === id);
       if (!isManual && !originalExists) {

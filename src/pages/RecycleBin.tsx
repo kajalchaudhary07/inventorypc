@@ -79,8 +79,9 @@ export default function RecycleBin() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
+    const sortedItems = [...items].sort((a, b) => b.deletedAt - a.deletedAt);
+    if (!q) return sortedItems;
+    return sortedItems.filter(
       (item) =>
         item.name.toLowerCase().includes(q) ||
         TYPE_LABELS[item.type].toLowerCase().includes(q)

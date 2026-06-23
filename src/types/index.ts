@@ -93,7 +93,17 @@ export interface ExtraCharge {
   amount: number;
 }
 
-export type SalesStatus = "Pending" | "Packed" | "Delivered" | "Cancelled" | "Returned";
+export type SalesStatus =
+  | "Placed"
+  | "Confirmed"
+  | "Processing"
+  | "Packed"
+  | "Dispatched"
+  | "Delivered"
+  | "Edited"
+  | "Cancelled"
+  | "Returned"
+  | "Pending";
 export type SalesChannel = "app" | "phone" | "whatsapp" | "manual";
 export type PaymentStatus = "Paid" | "Unpaid" | "Partial";
 
@@ -110,6 +120,7 @@ export interface SalesOrder {
   total: number;
   profit: number;
   status: SalesStatus;
+  inventoryStatus?: SalesStatus;
   paymentStatus: PaymentStatus;
   amountPaid?: number; // Persisted paid amount (Firestore)
   customerId?: string;
