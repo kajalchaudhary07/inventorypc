@@ -159,6 +159,41 @@ export default function OrderDetails() {
     }, 0);
   }, [normalizedItems]);
 
+  const subtotal = useMemo(() => {
+    return normalizedItems.reduce((acc, item) => acc + item.price * item.qty, 0);
+  }, [normalizedItems]);
+
+  const activeCharges = useMemo(() => {
+    if (!order) return [];
+    const rawLines = getItems(order);
+    const subtotal = rawLines.reduce((s: number, l: any) => s + (Number(l.price ?? l.unitPrice) || 0) * (Number(l.quantity ?? l.qty) || 0), 0);
+    const discountTotal = rawLines.reduce((s: number, l: any) => s + (Number(l.discount) || 0), 0);
+    const gstTotal = rawLines.reduce((s: number, l: any) => {
+      const price = Number(l.price ?? l.unitPrice) || 0;
+      const qty = Number(l.quantity ?? l.qty) || 0;
+      const discount = Number(l.discount) || 0;
+      const gstRate = Number(l.gstRate ?? l.gstPercent ?? l.gst) || 0;
+      const netAmount = price * qty - discount;
+      return s + (netAmount * gstRate) / 100;
+    }, 0);
+    const originalBaseTotal = subtotal - discountTotal + gstTotal;
+    const deliveryDiff = Math.max(0, Number(order.total ?? 0) - originalBaseTotal);
+
+    const loadedCharges = order.extraCharges ? order.extraCharges.map((c: any) => ({ ...c })) : [];
+    const hasDeliveryInCharges = loadedCharges.some((c: any) => c.label === "Delivery Charges");
+    const isApp = order.channel === "app";
+    const hasDelivery = deliveryDiff > 0 || isApp;
+
+    if (!hasDeliveryInCharges && hasDelivery) {
+      loadedCharges.push({
+        id: "delivery",
+        label: "Delivery Charges",
+        amount: deliveryDiff,
+      });
+    }
+    return loadedCharges;
+  }, [order]);
+
   if (!order) {
     return (
       <div>
@@ -384,6 +419,16 @@ export default function OrderDetails() {
               </tbody>
               {normalizedItems.length > 0 && paymentInfo && (
                 <tfoot>
+                  {activeCharges.map((c: any) => (
+                    <tr key={c.id} className="border-t border-slate-100 dark:border-slate-800">
+                      <td colSpan={7} className="py-1 pr-4 text-right font-medium text-slate-500">
+                        {c.label || "Charge"}
+                      </td>
+                      <td className="py-1 text-right font-semibold tabular-nums text-slate-900 dark:text-white">
+                        {c.label === "Delivery Charges" && c.amount === 0 ? "Free" : inr(c.amount)}
+                      </td>
+                    </tr>
+                  ))}
                   <tr className="border-t border-slate-200 dark:border-slate-700">
                     <td colSpan={7} className="pt-3 pr-4 text-right font-medium text-slate-500">
                       Bill Amount
@@ -431,7 +476,7 @@ export default function OrderDetails() {
                       Total Profit/Margin
                     </td>
                     <td className="pb-3 text-right font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-                      +{inr(totalProfit)}
+                      +{inr(totalProfit)} {subtotal > 0 && `(${((totalProfit / subtotal) * 100).toFixed(1)}%)`}
                     </td>
                   </tr>
                 </tfoot>

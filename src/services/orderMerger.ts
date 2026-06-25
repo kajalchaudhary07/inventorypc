@@ -83,6 +83,7 @@ export const mergeOrders = (
   (adminOrders || []).forEach((o: any) => {
     const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
     const lines = normalizeLines(rawItems);
+    const subtotal = lines.reduce((sum: number, l: any) => sum + l.price * l.qty, 0);
     const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
     const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
     const rawSalonName =
@@ -120,6 +121,7 @@ export const mergeOrders = (
       salonName: finalSalonName,
       salonId: o.salonId || o.customerId || o.userId || o.uid || null,
       lines,
+      subtotal,
       total: Number(o.total ?? o.amount ?? o.totalAmount ?? o.grandTotal ?? o.payableAmount ?? 0),
       profit,
       createdAt: toMs(o.createdAt || o.orderDate || o.date),
@@ -145,6 +147,7 @@ export const mergeOrders = (
     const existing = map.get(o.id);
     const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
     const lines = rawItems.length > 0 ? normalizeLines(rawItems) : existing ? existing.lines : [];
+    const subtotal = lines.reduce((sum: number, l: any) => sum + l.price * l.qty, 0);
     const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
     const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
 
@@ -172,6 +175,7 @@ export const mergeOrders = (
         ...existing,
         ...o,
         lines,
+        subtotal,
         profit,
         createdAt: o.createdAt ? toMs(o.createdAt) : existing.createdAt,
         updatedAt: o.updatedAt ? toMs(o.updatedAt) : (existing.updatedAt ? toMs(existing.updatedAt) : (o.createdAt ? toMs(o.createdAt) : existing.createdAt)),
@@ -196,6 +200,7 @@ export const mergeOrders = (
       const merged = {
         ...o,
         lines,
+        subtotal,
         profit,
         createdAt: o.createdAt ? toMs(o.createdAt) : Date.now(),
         updatedAt: o.updatedAt ? toMs(o.updatedAt) : (o.createdAt ? toMs(o.createdAt) : Date.now()),

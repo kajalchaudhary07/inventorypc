@@ -565,7 +565,7 @@ export default function DashboardHome() {
                     <td className="p-2.5 text-slate-500">{fmtDate(o.createdAt)}</td>
                     <td className="p-2.5 text-slate-700 dark:text-slate-200 truncate max-w-[200px]" title={o.salonName}>{o.salonName}</td>
                     <td className="p-2.5 text-right tabular-nums font-medium">{inr(o.total)}</td>
-                    <td className="p-2.5 text-right tabular-nums font-semibold text-emerald-600">{inr(o.profit)}</td>
+                    <td className="p-2.5 text-right tabular-nums font-semibold text-emerald-600">{inr(o.profit)} {o.subtotal > 0 && `(${((o.profit / o.subtotal) * 100).toFixed(1)}%)`}</td>
                     <td className="p-2.5 text-center"><StatusBadge value={o.status} /></td>
                   </tr>
                 ))}

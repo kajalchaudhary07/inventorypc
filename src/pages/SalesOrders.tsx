@@ -287,7 +287,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     if (saving) return;
     setSaving(true);
     try {
-      await updateOrderPricing(order, lines, updateMaster, { extraCharges: charges, invoiceNote: note });
+      await updateOrderPricing(order, lines, updateMaster, { extraCharges: activeCharges, invoiceNote: note });
       toast.success(updateMaster ? "Invoice saved & product prices updated" : "Invoice saved");
       setAskSave(false);
       setEditing(false);
@@ -650,7 +650,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
               <Badge color={statusColor}>{statusText}</Badge>
             </div>
           )}
-          <Line k="Total Profit/Margin" v={inr(totals.profit)} />
+          <Line k="Total Profit/Margin" v={`${inr(totals.profit)} ${totals.subtotal > 0 ? `(${((totals.profit / totals.subtotal) * 100).toFixed(1)}%)` : ""}`} />
         </div>
 
         {savings > 0 && (
@@ -1163,7 +1163,7 @@ export default function SalesOrders() {
                     <div>Bill: <span className="font-semibold tabular-nums text-slate-900 dark:text-white">{inr(billAmount)}</span></div>
                     <div>Paid: <span className="font-semibold tabular-nums text-slate-700 dark:text-slate-200">{inr(amountPaid)}</span></div>
                     <div>Bal: <span className="font-semibold tabular-nums text-rose-600 dark:text-rose-400">{inr(balanceAmount)}</span></div>
-                    <div className="text-[10px] text-emerald-600">Profit: +{inr(o.profit)}</div>
+                    <div className="text-[10px] text-emerald-600">Profit: +{inr(o.profit)} {o.subtotal > 0 && `(${((o.profit / o.subtotal) * 100).toFixed(1)}%)`}</div>
                   </div>
                   <Select value={o.status} onChange={(e) => changeStatus(o, e.target.value as SalesStatus)} className="w-auto cursor-pointer" onClick={(e) => e.stopPropagation()}>
                     {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}

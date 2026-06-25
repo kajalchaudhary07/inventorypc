@@ -21,6 +21,7 @@ interface SalonDraft {
   lines: OrderLine[];
   channel: SalesChannel;
   payment: PaymentStatus;
+  deliveryCharge?: number;
   updatedAt: number;
 }
 
@@ -45,6 +46,7 @@ export default function ManualOrderEntry() {
   const [salonId, setSalonId] = useState("");
   const [channel, setChannel] = useState<SalesChannel>("manual");
   const [payment, setPayment] = useState<PaymentStatus>("Unpaid");
+  const [deliveryCharge, setDeliveryCharge] = useState<number>(0);
   const [search, setSearch] = useState("");
   const [lines, setLines] = useState<OrderLine[]>([]);
   const [newSalonOpen, setNewSalonOpen] = useState(false);
@@ -182,11 +184,13 @@ export default function ManualOrderEntry() {
     const nextLines = lines;
     const nextChannel = channel;
     const nextPayment = payment;
+    const nextDeliveryCharge = deliveryCharge;
 
     if (
       JSON.stringify(current?.lines) !== JSON.stringify(nextLines) ||
       current?.channel !== nextChannel ||
-      current?.payment !== nextPayment
+      current?.payment !== nextPayment ||
+      current?.deliveryCharge !== nextDeliveryCharge
     ) {
       const updated = {
         ...drafts,
@@ -196,12 +200,13 @@ export default function ManualOrderEntry() {
           lines: nextLines,
           channel: nextChannel,
           payment: nextPayment,
+          deliveryCharge: nextDeliveryCharge,
           updatedAt: Date.now(),
         },
       };
       saveAllDrafts(updated);
     }
-  }, [lines, channel, payment, salonId, view]);
+  }, [lines, channel, payment, deliveryCharge, salonId, view]);
 
   // Handle switching salonId inside Order Entry
   const handleSalonChange = (newSalonId: string) => {
@@ -211,6 +216,7 @@ export default function ManualOrderEntry() {
       setLines(existing.lines || []);
       setChannel(existing.channel || "manual");
       setPayment(existing.payment || "Unpaid");
+      setDeliveryCharge(existing.deliveryCharge || 0);
     } else {
       const oldKey = salonId || "unsigned";
       const oldDraft = drafts[oldKey];
@@ -223,6 +229,7 @@ export default function ManualOrderEntry() {
           lines: oldDraft.lines,
           channel: oldDraft.channel,
           payment: oldDraft.payment,
+          deliveryCharge: oldDraft.deliveryCharge,
           updatedAt: Date.now(),
         };
         saveAllDrafts(nextDrafts);
@@ -237,6 +244,7 @@ export default function ManualOrderEntry() {
     setLines([]);
     setChannel("manual");
     setPayment("Unpaid");
+    setDeliveryCharge(0);
     setView("entry");
   };
 
@@ -246,6 +254,7 @@ export default function ManualOrderEntry() {
     setLines(draft.lines || []);
     setChannel(draft.channel || "manual");
     setPayment(draft.payment || "Unpaid");
+    setDeliveryCharge(draft.deliveryCharge || 0);
     setView("entry");
   };
 
@@ -346,7 +355,10 @@ export default function ManualOrderEntry() {
   };
 
   const update = (id: string, patch: Partial<OrderLine>) => setLines(lines.map((l) => l.productId === id ? { ...l, ...patch } : l));
-  const totals = orderTotals(lines);
+  const extraCharges = useMemo(() => {
+    return deliveryCharge > 0 ? [{ id: "delivery", label: "Delivery Charges", amount: deliveryCharge }] : [];
+  }, [deliveryCharge]);
+  const totals = orderTotals(lines, extraCharges);
 
   const submit = async () => {
     const salon = salons.find((s) => s.id === salonId);
@@ -365,6 +377,7 @@ export default function ManualOrderEntry() {
       channel,
       lines,
       ...totals,
+      extraCharges,
       status: "Pending",
       paymentStatus: payment,
       createdAt: Date.now(),
@@ -391,6 +404,7 @@ export default function ManualOrderEntry() {
     setSalonId("");
     setChannel("manual");
     setPayment("Unpaid");
+    setDeliveryCharge(0);
     setView("dashboard");
     toast.success("Draft cleared");
   };
@@ -712,12 +726,25 @@ export default function ManualOrderEntry() {
 
           <Card className="p-5">
             <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white"><ShoppingCart className="h-4 w-4" /> Summary</h3>
+            <div className="mb-3">
+              <Field label="Delivery Charge (₹)">
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={deliveryCharge || ""}
+                  onChange={(e) => setDeliveryCharge(Math.max(0, Number(e.target.value)))}
+                  placeholder="0.00"
+                />
+              </Field>
+            </div>
             <div className="space-y-1.5 text-sm">
               <Row k="Subtotal" v={inr(totals.subtotal)} />
-              <Row k="Discount" v={`- ${inr(totals.discountTotal)}`} />
+              {totals.discountTotal > 0 && <Row k="Discount" v={`- ${inr(totals.discountTotal)}`} />}
               <Row k="GST" v={inr(totals.gstTotal)} />
+              {deliveryCharge > 0 && <Row k="Delivery Charges" v={inr(deliveryCharge)} />}
               <div className="border-t border-slate-200 pt-1.5 dark:border-slate-700"><Row k="Total" v={inr(totals.total)} bold /></div>
-              <Row k="Est. profit" v={inr(totals.profit)} accent="text-emerald-600" />
+              <Row k="Est. profit" v={`${inr(totals.profit)} ${totals.subtotal > 0 ? `(${((totals.profit / totals.subtotal) * 100).toFixed(1)}%)` : ""}`} accent="text-emerald-600" />
             </div>
             <Button className="mt-4 w-full" onClick={submit}>Create order</Button>
           </Card>
