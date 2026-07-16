@@ -3,6 +3,7 @@
  * Frontend-only merger for orders and salesOrders.
  * Merges e-commerce/retail orders (orders) with inventory overrides (salesOrders).
  */
+import { lineProfit } from "@/lib/calc";
 
 const toMs = (ts: any): number => {
   if (!ts) return 0;
@@ -84,7 +85,7 @@ export const mergeOrders = (
     const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
     const lines = normalizeLines(rawItems);
     const subtotal = lines.reduce((sum: number, l: any) => sum + l.price * l.qty, 0);
-    const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
+    const profit = lines.reduce((sum: number, l: any) => sum + lineProfit(l), 0);
     const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
     const rawSalonName =
       o.salonName ||
@@ -148,7 +149,7 @@ export const mergeOrders = (
     const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.lines) ? o.lines : [];
     const lines = rawItems.length > 0 ? normalizeLines(rawItems) : existing ? existing.lines : [];
     const subtotal = lines.reduce((sum: number, l: any) => sum + l.price * l.qty, 0);
-    const profit = lines.reduce((sum: number, l: any) => sum + (l.price - l.cost) * l.qty, 0);
+    const profit = lines.reduce((sum: number, l: any) => sum + lineProfit(l), 0);
     const { ownerName, resolvedSalonName, customerName } = resolveOrderNames(o);
 
     // Capitalize status & payment status

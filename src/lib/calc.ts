@@ -39,7 +39,8 @@ export function lineProfit(l: OrderLine) {
   const price = Number(l.price) || 0;
   const cost = Number(l.cost) || 0;
   const qty = Number(l.qty) || 0;
-  return (price - cost) * qty;
+  const discount = Number(l.discount) || 0;
+  return (price - cost) * qty - discount;
 }
 export function orderTotals(lines: OrderLine[], extraCharges: { amount: number }[] = []) {
   const subtotal = lines.reduce((s, l) => s + (Number(l.price) || 0) * (Number(l.qty) || 0), 0);

@@ -133,6 +133,8 @@ export interface SalesOrder {
   extraChargesTotal?: number;
   invoiceNote?: string; // customer-facing note shown at invoice bottom
   expectedDelivery?: number; // admin-entered expected delivery date (timestamp)
+  deliveryEnabled?: boolean; // explicit flag to enable/disable delivery charges and address details
+  detailFields?: DetailFieldsConfig; // saved UI toggles for invoice printing/sharing
   // Timestamps recorded as the order moves through its lifecycle. Used for
   // order-fulfillment time and delivery-success metrics.
   packedAt?: number;

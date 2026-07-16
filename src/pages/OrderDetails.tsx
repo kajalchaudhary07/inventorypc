@@ -182,7 +182,10 @@ export default function OrderDetails() {
     const loadedCharges = order.extraCharges ? order.extraCharges.map((c: any) => ({ ...c })) : [];
     const hasDeliveryInCharges = loadedCharges.some((c: any) => c.label === "Delivery Charges");
     const isApp = order.channel === "app";
-    const hasDelivery = deliveryDiff > 0 || isApp;
+    
+    const hasDelivery = order.deliveryEnabled !== undefined
+      ? order.deliveryEnabled
+      : (deliveryDiff > 0 || isApp || hasDeliveryInCharges);
 
     if (!hasDeliveryInCharges && hasDelivery) {
       loadedCharges.push({

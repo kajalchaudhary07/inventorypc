@@ -24,6 +24,7 @@ import type {
   SalesOrder,
   SalesStatus,
   StockMovement,
+  DetailFieldsConfig,
 } from "@/types";
 
 const COLLECTIONS: CollectionName[] = [
@@ -575,7 +576,7 @@ export async function updateOrderPricing(
   order: SalesOrder,
   lines: OrderLine[],
   updateMaster: boolean,
-  extras?: { extraCharges?: { id: string; label: string; amount: number }[]; invoiceNote?: string }
+  extras?: { extraCharges?: { id: string; label: string; amount: number }[]; invoiceNote?: string; deliveryEnabled?: boolean; detailFields?: DetailFieldsConfig }
 ) {
   const extraCharges = extras?.extraCharges ?? order.extraCharges ?? [];
   const totals = orderTotals(lines, extraCharges);
@@ -605,6 +606,8 @@ export async function updateOrderPricing(
     items,
     ...totals,
     extraCharges,
+    deliveryEnabled: extras?.deliveryEnabled !== undefined ? extras.deliveryEnabled : (order.deliveryEnabled ?? false),
+    detailFields: extras?.detailFields ?? order.detailFields ?? null,
     invoiceNote: extras?.invoiceNote ?? order.invoiceNote ?? "",
     updatedAt: Date.now(),
   };

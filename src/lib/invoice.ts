@@ -90,9 +90,6 @@ export function buildInvoiceHtml(
   const chargesRows = (order.extraCharges || [])
     .map(
       (c) => {
-        if (c.label === "Delivery Charges" && !detailFields.delivery) {
-          return "";
-        }
         const amtStr = c.label === "Delivery Charges" && c.amount === 0 ? "Free" : money(c.amount);
         return `
         <div class="row">
@@ -288,9 +285,6 @@ export function invoiceWhatsappText(
   const computedSubtotal = order.subtotal !== undefined ? order.subtotal : order.lines.reduce((s: number, l: any) => s + (Number(l.price) || 0) * (Number(l.qty) || 0), 0);
   const chargesList = (order.extraCharges || [])
     .map((c) => {
-      if (c.label === "Delivery Charges" && !detailFields.delivery) {
-        return null;
-      }
       const amtStr = c.label === "Delivery Charges" && c.amount === 0 ? "Free" : money(c.amount);
       return `• ${c.label || "Charge"}: ${amtStr}`;
     })

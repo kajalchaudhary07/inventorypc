@@ -10,7 +10,7 @@ import { useUIStore } from "@/store/uiStore";
 import { setOrderStatus, updateOrderPricing, saveDoc, logActivity, saveOrderPayment } from "@/services/data";
 import { deleteToBin } from "@/services/recycleBin";
 import { inr, fmtDateTime, uid, getOrderPaymentInfo } from "@/lib/utils";
-import { lineGst, lineNet, orderTotals } from "@/lib/calc";
+import { lineGst, lineNet, lineProfit, orderTotals } from "@/lib/calc";
 import { printInvoice, shareInvoiceWhatsapp } from "@/lib/invoice";
 import { paymentReminderDraft, orderUpdateDraft, shareTextWhatsapp } from "@/lib/messages";
 import { getMergedProducts } from "@/services/productOverrides";
@@ -46,6 +46,8 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
   const [editing, setEditing] = useState(false);
   const [lines, setLines] = useState<OrderLine[]>([]);
   const [charges, setCharges] = useState<ExtraCharge[]>([]);
+  const [deliveryEnabled, setDeliveryEnabled] = useState(false);
+  const [deliveryAmount, setDeliveryAmount] = useState(0);
   const [note, setNote] = useState("");
   const [askSave, setAskSave] = useState(false);
   const [search, setSearch] = useState("");
@@ -70,6 +72,8 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     if (!order) {
       setLines([]);
       setCharges([]);
+      setDeliveryEnabled(false);
+      setDeliveryAmount(0);
       setNote("");
       setEditing(false);
       setAskSave(false);
@@ -100,17 +104,20 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
       const deliveryDiff = Math.max(0, order.total - originalBaseTotal);
 
       const loadedCharges = order.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : [];
-      const hasDeliveryInCharges = loadedCharges.some((c) => c.label === "Delivery Charges");
+      const deliveryChargeItem = loadedCharges.find((c) => c.label === "Delivery Charges");
+      const hasDeliveryInCharges = !!deliveryChargeItem;
       const isApp = order.channel === "app";
-      const hasDelivery = deliveryDiff > 0 || isApp;
 
-      if (!hasDeliveryInCharges && hasDelivery) {
-        loadedCharges.push({
-          id: "delivery",
-          label: "Delivery Charges",
-          amount: deliveryDiff,
-        });
-      }
+      const hasDelivery = order.deliveryEnabled !== undefined
+        ? order.deliveryEnabled
+        : (deliveryDiff > 0 || isApp || hasDeliveryInCharges);
+
+      const initialDeliveryAmount = deliveryChargeItem
+        ? deliveryChargeItem.amount
+        : (deliveryDiff > 0 ? deliveryDiff : 0);
+
+      // Clean loadedCharges from "Delivery Charges" so it only contains non-delivery extra charges
+      const otherCharges = loadedCharges.filter((c) => c.label !== "Delivery Charges");
 
       setLines(order.lines.map((l) => {
         let mrp = (l as any).mrp;
@@ -131,7 +138,9 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
           mrp: Number(mrp ?? l.price)
         };
       }));
-      setCharges(loadedCharges);
+      setCharges(otherCharges);
+      setDeliveryEnabled(hasDelivery);
+      setDeliveryAmount(initialDeliveryAmount);
       setNote(order.invoiceNote ?? "");
       setEditing(false);
       setAskSave(false);
@@ -139,7 +148,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
       setSearch("");
       setQuickAdd(false);
       setVariantPickerProduct(null);
-      setDetailFields({
+      const defaultFields = {
         amountPaid: false,
         amountToBePaid: false,
         paymentStatus: false,
@@ -148,17 +157,34 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         source: false,
         placeOfSupply: false,
         delivery: hasDelivery,
-      });
+      };
+      setDetailFields(order.detailFields ? { ...defaultFields, ...order.detailFields } : defaultFields);
     }
   }, [order, allProducts]);
 
   if (!order) return null;
 
-  const activeCharges = charges.filter((c) => c.label !== "Delivery Charges" || detailFields.delivery);
+  const activeCharges = [
+    ...charges,
+    ...(deliveryEnabled ? [{ id: "delivery", label: "Delivery Charges", amount: deliveryAmount }] : [])
+  ];
   const totals = orderTotals(lines, activeCharges);
+  
+  const originalExtraCharges = order.extraCharges ?? [];
   const dirty =
     JSON.stringify(lines) !== JSON.stringify(order.lines) ||
-    JSON.stringify(charges) !== JSON.stringify(order.extraCharges ?? []) ||
+    JSON.stringify(activeCharges) !== JSON.stringify(originalExtraCharges) ||
+    deliveryEnabled !== (order.deliveryEnabled ?? (originalExtraCharges.some(c => c.label === "Delivery Charges") || order.channel === "app")) ||
+    JSON.stringify(detailFields) !== JSON.stringify(order.detailFields ?? {
+      amountPaid: false,
+      amountToBePaid: false,
+      paymentStatus: false,
+      totalGst: false,
+      gstColumn: false,
+      source: false,
+      placeOfSupply: false,
+      delivery: order.deliveryEnabled ?? (originalExtraCharges.some(c => c.label === "Delivery Charges") || order.channel === "app")
+    }) ||
     note !== (order.invoiceNote ?? "");
 
   // Edit by index (lines can repeat a productId or be newly added).
@@ -278,7 +304,40 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         mrp: Number(mrp ?? l.price)
       };
     }));
-    setCharges(order.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : []);
+
+    const originalTotals = orderTotals(order.lines, []);
+    const originalBaseTotal = originalTotals.total;
+    const deliveryDiff = Math.max(0, order.total - originalBaseTotal);
+
+    const loadedCharges = order.extraCharges ? order.extraCharges.map((c) => ({ ...c })) : [];
+    const deliveryChargeItem = loadedCharges.find((c) => c.label === "Delivery Charges");
+    const hasDeliveryInCharges = !!deliveryChargeItem;
+    const isApp = order.channel === "app";
+
+    const hasDelivery = order.deliveryEnabled !== undefined
+      ? order.deliveryEnabled
+      : (deliveryDiff > 0 || isApp || hasDeliveryInCharges);
+
+    const initialDeliveryAmount = deliveryChargeItem
+      ? deliveryChargeItem.amount
+      : (deliveryDiff > 0 ? deliveryDiff : 0);
+
+    const otherCharges = loadedCharges.filter((c) => c.label !== "Delivery Charges");
+
+    const defaultFields = {
+      amountPaid: false,
+      amountToBePaid: false,
+      paymentStatus: false,
+      totalGst: false,
+      gstColumn: false,
+      source: false,
+      placeOfSupply: false,
+      delivery: hasDelivery,
+    };
+    setDetailFields(order.detailFields ? { ...defaultFields, ...order.detailFields } : defaultFields);
+    setCharges(otherCharges);
+    setDeliveryEnabled(hasDelivery);
+    setDeliveryAmount(initialDeliveryAmount);
     setNote(order.invoiceNote ?? "");
     setEditing(false);
   };
@@ -287,7 +346,12 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
     if (saving) return;
     setSaving(true);
     try {
-      await updateOrderPricing(order, lines, updateMaster, { extraCharges: activeCharges, invoiceNote: note });
+      await updateOrderPricing(order, lines, updateMaster, {
+        extraCharges: activeCharges,
+        deliveryEnabled,
+        detailFields,
+        invoiceNote: note
+      });
       toast.success(updateMaster ? "Invoice saved & product prices updated" : "Invoice saved");
       setAskSave(false);
       setEditing(false);
@@ -300,7 +364,6 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
       setSaving(false);
     }
   };
-
   // Resolve metadata
   const getField = (obj: any, keys: string[]) => {
     for (const key of keys) {
@@ -399,84 +462,7 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
       }
     >
       <div className="space-y-4 text-sm">
-        {/* Toggle checkboxes for detailed fields */}
-        <div className="border-b border-slate-200 pb-4 dark:border-slate-800 space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Show / Hide Fields</div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
-            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={detailFields.amountPaid}
-                onChange={(e) => setDetailFields((prev) => ({ ...prev, amountPaid: e.target.checked }))}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-              />
-              <span>Amount Paid</span>
-            </label>
-            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={detailFields.amountToBePaid}
-                onChange={(e) => setDetailFields((prev) => ({ ...prev, amountToBePaid: e.target.checked }))}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-              />
-              <span>Amount To Be Paid</span>
-            </label>
-            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={detailFields.paymentStatus}
-                onChange={(e) => setDetailFields((prev) => ({ ...prev, paymentStatus: e.target.checked }))}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-              />
-              <span>Payment Status</span>
-            </label>
-            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={detailFields.totalGst}
-                onChange={(e) => setDetailFields((prev) => ({ ...prev, totalGst: e.target.checked }))}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-              />
-              <span>Total GST</span>
-            </label>
-            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={detailFields.gstColumn}
-                onChange={(e) => setDetailFields((prev) => ({ ...prev, gstColumn: e.target.checked }))}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-              />
-              <span>GST Column</span>
-            </label>
-            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={detailFields.source}
-                onChange={(e) => setDetailFields((prev) => ({ ...prev, source: e.target.checked }))}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-              />
-              <span>Source</span>
-            </label>
-            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={detailFields.placeOfSupply}
-                onChange={(e) => setDetailFields((prev) => ({ ...prev, placeOfSupply: e.target.checked }))}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-              />
-              <span>Place of Supply</span>
-            </label>
-            <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
-              <input
-                type="checkbox"
-                checked={detailFields.delivery}
-                onChange={(e) => setDetailFields((prev) => ({ ...prev, delivery: e.target.checked }))}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-              />
-              <span>Delivery</span>
-            </label>
-          </div>
-        </div>
+
 
         <div className="flex items-start justify-between">
           <div>
@@ -565,6 +551,106 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
               )}
             </div>
             <Button variant="ghost" onClick={() => setQuickAdd(true)} className="text-indigo-600"><PackagePlus className="h-4 w-4" /> Create new product</Button>
+            {/* Delivery status settings */}
+            <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Delivery Status</span>
+                <label className="relative inline-flex items-center cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={deliveryEnabled}
+                    onChange={(e) => setDeliveryEnabled(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-slate-600 peer-checked:bg-indigo-600"></div>
+                  <span className="ml-2 text-xs font-medium text-slate-700 dark:text-slate-200">
+                    {deliveryEnabled ? "Enabled" : "Disabled"}
+                  </span>
+                </label>
+              </div>
+              {deliveryEnabled && (
+                <Field label="Delivery Charge Amount (₹)">
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    value={deliveryAmount || ""}
+                    onChange={(e) => setDeliveryAmount(Math.max(0, Number(e.target.value)))}
+                    placeholder="0 (Free Delivery)"
+                  />
+                </Field>
+              )}
+            </div>
+
+            {/* Show / Hide Fields Options */}
+            <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700 space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Show / Hide Fields on Invoice</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+                <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={detailFields.amountPaid}
+                    onChange={(e) => setDetailFields((prev) => ({ ...prev, amountPaid: e.target.checked }))}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                  />
+                  <span>Amount Paid</span>
+                </label>
+                <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={detailFields.amountToBePaid}
+                    onChange={(e) => setDetailFields((prev) => ({ ...prev, amountToBePaid: e.target.checked }))}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                  />
+                  <span>Amount To Be Paid</span>
+                </label>
+                <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={detailFields.paymentStatus}
+                    onChange={(e) => setDetailFields((prev) => ({ ...prev, paymentStatus: e.target.checked }))}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                  />
+                  <span>Payment Status</span>
+                </label>
+                <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={detailFields.totalGst}
+                    onChange={(e) => setDetailFields((prev) => ({ ...prev, totalGst: e.target.checked }))}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                  />
+                  <span>Total GST</span>
+                </label>
+                <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={detailFields.gstColumn}
+                    onChange={(e) => setDetailFields((prev) => ({ ...prev, gstColumn: e.target.checked }))}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                  />
+                  <span>GST Column</span>
+                </label>
+                <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={detailFields.source}
+                    onChange={(e) => setDetailFields((prev) => ({ ...prev, source: e.target.checked }))}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                  />
+                  <span>Source</span>
+                </label>
+                <label className="inline-flex items-center cursor-pointer gap-2 select-none text-xs font-medium text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={detailFields.placeOfSupply}
+                    onChange={(e) => setDetailFields((prev) => ({ ...prev, placeOfSupply: e.target.checked }))}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                  />
+                  <span>Place of Supply</span>
+                </label>
+              </div>
+            </div>
 
             {/* Extra charges */}
             <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
@@ -605,8 +691,8 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
               {lines.map((l, i) => {
                 const cost = Number(l.cost ?? 0);
                 const hasCost = cost > 0;
-                // Calculate profit using formula (price - cost) * qty
-                const profitVal = (l.price - cost) * l.qty;
+                // Calculate profit using lineProfit helper (includes discount subtraction)
+                const profitVal = lineProfit(l);
                 const displayCost = hasCost ? inr(cost) : "—";
                 const displayProfit = hasCost ? inr(profitVal) : "—";
                 return (
@@ -631,14 +717,14 @@ function InvoiceModal({ order, onClose }: { order: SalesOrder | null; onClose: (
         <div className="ml-auto w-72 space-y-1 border-t border-slate-100 dark:border-slate-800 pt-3">
           <Line k="Subtotal" v={inr(totals.subtotal)} />
           {totals.discountTotal > 0 && <Line k="Discount" v={`- ${inr(totals.discountTotal)}`} />}
-          {charges.map((c) => {
-            if (c.label === "Delivery Charges" && !detailFields.delivery) {
-              return null;
-            }
-            return (
-              <Line key={c.id} k={c.label || "Charge"} v={c.label === "Delivery Charges" && c.amount === 0 ? "Free" : inr(c.amount)} />
-            );
-          })}
+          {/* Display general extra charges */}
+          {charges.map((c) => (
+            <Line key={c.id} k={c.label || "Charge"} v={inr(c.amount)} />
+          ))}
+          {/* Display Delivery Charges if enabled */}
+          {deliveryEnabled && (
+            <Line k="Delivery Charges" v={deliveryAmount === 0 ? "Free" : inr(deliveryAmount)} />
+          )}
           {detailFields.totalGst && <Line k="Total GST" v={inr(totals.gstTotal)} />}
           <div className="border-t border-slate-200 my-1 pt-1 dark:border-slate-700"></div>
           <Line k="Bill Amount" v={inr(totals.total)} bold />
