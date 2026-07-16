@@ -937,6 +937,7 @@ export default function SalesOrders() {
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("all");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
+  const [statsMode, setStatsMode] = useState<"paid" | "all">("paid");
 
   const dateFilteredOrders = useMemo(() => {
     return orders.filter((o) => {
@@ -998,11 +999,14 @@ export default function SalesOrders() {
     .sort((a, b) => b.createdAt - a.createdAt);
 
   const { statTotalOrders, statRevenue, statProfit } = useMemo(() => {
-    const totalOrders = dateFilteredOrders.length;
-    const eligibleOrders = dateFilteredOrders.filter((o) => {
-      const { statusText } = getOrderPaymentInfo(o);
-      return statusText === "Paid";
-    });
+    const totalOrders = rows.length;
+    const nonCancelled = rows.filter((o) => o.status !== "Cancelled");
+    const eligibleOrders = statsMode === "paid"
+      ? nonCancelled.filter((o) => {
+          const { statusText } = getOrderPaymentInfo(o);
+          return statusText === "Paid";
+        })
+      : nonCancelled;
     const revenue = eligibleOrders.reduce((sum, o) => sum + o.total, 0);
     const profit = eligibleOrders.reduce((sum, o) => sum + o.profit, 0);
     return {
@@ -1010,7 +1014,7 @@ export default function SalesOrders() {
       statRevenue: revenue,
       statProfit: profit,
     };
-  }, [dateFilteredOrders]);
+  }, [rows, statsMode]);
 
   const handlePaymentToggle = async (e: React.MouseEvent, o: SalesOrder) => {
     e.stopPropagation();
@@ -1050,40 +1054,66 @@ export default function SalesOrders() {
       {/* Date Filter & Stats Dashboard */}
       <div className="mt-4 space-y-4 animate-in fade-in duration-300">
         {/* Date Filter Bar */}
-        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Filter Date:</span>
-          <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
-            {(["all", "today", "week", "month", "custom"] as const).map((mode) => (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Filter Date:</span>
+            <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
+              {(["all", "today", "week", "month", "custom"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setDateFilter(mode)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${dateFilter === mode
+                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
+                    : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                    }`}
+                >
+                  {mode === "all" ? "All Time" : mode === "today" ? "Today" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
+                </button>
+              ))}
+            </div>
+
+            {dateFilter === "custom" && (
+              <div className="flex items-center gap-2 animate-in slide-in-from-left-2 duration-200">
+                <input
+                  type="date"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
+                />
+                <span className="text-xs text-slate-400">to</span>
+                <input
+                  type="date"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Revenue Calc:</span>
+            <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
               <button
-                key={mode}
-                onClick={() => setDateFilter(mode)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition ${dateFilter === mode
+                onClick={() => setStatsMode("paid")}
+                className={`rounded-md px-3 py-1 text-xs font-medium transition ${statsMode === "paid"
                   ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
                   : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
                   }`}
               >
-                {mode === "all" ? "All Time" : mode === "today" ? "Today" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
+                Paid Only
               </button>
-            ))}
-          </div>
-
-          {dateFilter === "custom" && (
-            <div className="flex items-center gap-2 animate-in slide-in-from-left-2 duration-200">
-              <input
-                type="date"
-                value={customStart}
-                onChange={(e) => setCustomStart(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
-              />
-              <span className="text-xs text-slate-400">to</span>
-              <input
-                type="date"
-                value={customEnd}
-                onChange={(e) => setCustomEnd(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
-              />
+              <button
+                onClick={() => setStatsMode("all")}
+                className={`rounded-md px-3 py-1 text-xs font-medium transition ${statsMode === "all"
+                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
+                  : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                  }`}
+              >
+                All Payments
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Top Summary Stats Cards */}
@@ -1106,7 +1136,9 @@ export default function SalesOrders() {
               <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1 tabular-nums">
                 {inr(statRevenue)}
               </h3>
-              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">paid only</p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+                {statsMode === "paid" ? "paid only" : "all payments (excl. cancelled)"}
+              </p>
             </div>
             <div className="rounded-lg bg-indigo-50 p-2 text-indigo-500 dark:bg-indigo-950/50 dark:text-indigo-400">
               <FileText className="h-5 w-5" />
@@ -1119,7 +1151,9 @@ export default function SalesOrders() {
               <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-1 tabular-nums">
                 {inr(statProfit)}
               </h3>
-              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">paid only</p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+                {statsMode === "paid" ? "paid only" : "all payments (excl. cancelled)"}
+              </p>
             </div>
             <div className="rounded-lg bg-emerald-50 p-2 text-emerald-500 dark:bg-emerald-950/50 dark:text-emerald-400">
               <FileText className="h-5 w-5" />
