@@ -939,6 +939,10 @@ export default function SalesOrders() {
   const [customEnd, setCustomEnd] = useState("");
   const [statsMode, setStatsMode] = useState<"paid" | "all">("paid");
 
+  const [amountFilter, setAmountFilter] = useState<"all" | "under5k" | "5k-20k" | "over20k" | "custom">("all");
+  const [customMinAmount, setCustomMinAmount] = useState("");
+  const [customMaxAmount, setCustomMaxAmount] = useState("");
+
   const dateFilteredOrders = useMemo(() => {
     return orders.filter((o) => {
       if (dateFilter === "all") return true;
@@ -965,15 +969,31 @@ export default function SalesOrders() {
     });
   }, [orders, dateFilter, customStart, customEnd]);
 
+  const amountFilteredOrders = useMemo(() => {
+    return dateFilteredOrders.filter((o) => {
+      const amt = o.total;
+      if (amountFilter === "all") return true;
+      if (amountFilter === "under5k") return amt < 5000;
+      if (amountFilter === "5k-20k") return amt >= 5000 && amt <= 20000;
+      if (amountFilter === "over20k") return amt > 20000;
+      if (amountFilter === "custom") {
+        const min = customMinAmount ? Number(customMinAmount) : 0;
+        const max = customMaxAmount ? Number(customMaxAmount) : Infinity;
+        return amt >= min && amt <= max;
+      }
+      return true;
+    });
+  }, [dateFilteredOrders, amountFilter, customMinAmount, customMaxAmount]);
+
   const counts = useMemo(() => {
-    const c: Record<string, number> = { all: dateFilteredOrders.length };
+    const c: Record<string, number> = { all: amountFilteredOrders.length };
     STATUSES.forEach((s) => {
-      c[s] = dateFilteredOrders.filter((o) => o.status === s).length;
+      c[s] = amountFilteredOrders.filter((o) => o.status === s).length;
     });
     return c;
-  }, [dateFilteredOrders]);
+  }, [amountFilteredOrders]);
 
-  const rows = dateFilteredOrders
+  const rows = amountFilteredOrders
     .filter((o) => {
       if (statusTab !== "all" && o.status !== statusTab) return false;
       if (channel !== "all" && o.channel !== channel) return false;
@@ -1057,66 +1077,112 @@ export default function SalesOrders() {
 
       {/* Date Filter & Stats Dashboard */}
       <div className="mt-4 space-y-4 animate-in fade-in duration-300">
-        {/* Date Filter Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Filter Date:</span>
-            <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
-              {(["all", "today", "week", "month", "custom"] as const).map((mode) => (
+        {/* Date & Amount Filter Bar */}
+        <div className="space-y-3 rounded-lg bg-slate-50 p-3.5 dark:bg-slate-800/50 border border-slate-200/40 dark:border-slate-700/30">
+          {/* Date Filter Row */}
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Filter Date:</span>
+              <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
+                {(["all", "today", "week", "month", "custom"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setDateFilter(mode)}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition ${dateFilter === mode
+                      ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
+                      : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                      }`}
+                  >
+                    {mode === "all" ? "All Time" : mode === "today" ? "Today" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
+                  </button>
+                ))}
+              </div>
+
+              {dateFilter === "custom" && (
+                <div className="flex items-center gap-2 animate-in slide-in-from-left-2 duration-200">
+                  <input
+                    type="date"
+                    value={customStart}
+                    onChange={(e) => setCustomStart(e.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
+                  />
+                  <span className="text-xs text-slate-400">to</span>
+                  <input
+                    type="date"
+                    value={customEnd}
+                    onChange={(e) => setCustomEnd(e.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Revenue Calc:</span>
+              <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
                 <button
-                  key={mode}
-                  onClick={() => setDateFilter(mode)}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${dateFilter === mode
+                  onClick={() => setStatsMode("paid")}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${statsMode === "paid"
                     ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
                     : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
                     }`}
                 >
-                  {mode === "all" ? "All Time" : mode === "today" ? "Today" : mode === "week" ? "Last Week" : mode === "month" ? "Last Month" : "Custom Range"}
+                  Paid Only
+                </button>
+                <button
+                  onClick={() => setStatsMode("all")}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${statsMode === "all"
+                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
+                    : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                    }`}
+                >
+                  All Payments
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-slate-200/60 dark:border-slate-700/50 my-1"></div>
+
+          {/* Amount Filter Row */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Filter Amount:</span>
+            <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
+              {(["all", "under5k", "5k-20k", "over20k", "custom"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setAmountFilter(mode)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${amountFilter === mode
+                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
+                    : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                    }`}
+                >
+                  {mode === "all" ? "All Amounts" : mode === "under5k" ? "Under ₹5,000" : mode === "5k-20k" ? "₹5,000 - ₹20,000" : mode === "over20k" ? "Over ₹20,000" : "Custom Range"}
                 </button>
               ))}
             </div>
 
-            {dateFilter === "custom" && (
+            {amountFilter === "custom" && (
               <div className="flex items-center gap-2 animate-in slide-in-from-left-2 duration-200">
                 <input
-                  type="date"
-                  value={customStart}
-                  onChange={(e) => setCustomStart(e.target.value)}
-                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
+                  type="number"
+                  min="0"
+                  placeholder="Min ₹"
+                  value={customMinAmount}
+                  onChange={(e) => setCustomMinAmount(e.target.value)}
+                  className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none placeholder:text-slate-400"
                 />
                 <span className="text-xs text-slate-400">to</span>
                 <input
-                  type="date"
-                  value={customEnd}
-                  onChange={(e) => setCustomEnd(e.target.value)}
-                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
+                  type="number"
+                  min="0"
+                  placeholder="Max ₹"
+                  value={customMaxAmount}
+                  onChange={(e) => setCustomMaxAmount(e.target.value)}
+                  className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none placeholder:text-slate-400"
                 />
               </div>
             )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Revenue Calc:</span>
-            <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
-              <button
-                onClick={() => setStatsMode("paid")}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition ${statsMode === "paid"
-                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
-                  : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                  }`}
-              >
-                Paid Only
-              </button>
-              <button
-                onClick={() => setStatsMode("all")}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition ${statsMode === "all"
-                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white"
-                  : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                  }`}
-              >
-                All Payments
-              </button>
-            </div>
           </div>
         </div>
 
