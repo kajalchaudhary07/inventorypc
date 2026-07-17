@@ -92,13 +92,17 @@ export default function OrderDetails() {
   }, [order, localVersion]);
 
   const [editPaidAmount, setEditPaidAmount] = useState("");
+  const [editPaymentMode, setEditPaymentMode] = useState("");
 
   // Synchronize input with current persisted amount
   useEffect(() => {
     if (paymentInfo) {
       setEditPaidAmount(String(paymentInfo.amountPaid));
     }
-  }, [paymentInfo]);
+    if (order) {
+      setEditPaymentMode(order.paymentMethod || order.paymentMode || "COD");
+    }
+  }, [paymentInfo, order]);
 
   const handleSavePayment = async () => {
     if (!order) return;
@@ -108,13 +112,13 @@ export default function OrderDetails() {
       return;
     }
     try {
-      await saveOrderPayment(order.id, amount);
+      await saveOrderPayment(order.id, amount, editPaymentMode);
       // Force re-evaluation of payment details
       setLocalVersion((v) => v + 1);
-      toast.success("Payment amount updated successfully!");
+      toast.success("Payment details updated successfully!");
     } catch (err) {
       console.error("Error saving payment:", err);
-      toast.error("Failed to save payment");
+      toast.error("Failed to save payment details");
     }
   };
 
@@ -296,6 +300,12 @@ export default function OrderDetails() {
             <p className="font-semibold text-slate-900 dark:text-white">{customer.name}</p>
             {customer.email !== "-" && <p className="mt-0.5 text-sm text-slate-500">{customer.email}</p>}
             {customer.phone !== "-" && <p className="text-sm text-slate-500">{customer.phone}</p>}
+            {(order.salesExecutive || order.createdBy) && (
+              <div className="mt-4 border-t border-slate-100 dark:border-slate-800 pt-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Sales Executive</p>
+                <p className="text-sm font-semibold text-indigo-600 dark:text-indigo-400">{order.salesExecutive || order.createdBy}</p>
+              </div>
+            )}
           </div>
         </Card>
 
@@ -336,27 +346,45 @@ export default function OrderDetails() {
                   </div>
                 </div>
 
-                {/* Input control to edit customer paid amount */}
-                <div className="border-t border-slate-100 dark:border-slate-800 pt-2 mt-2">
-                  <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-1">
-                    Update Amount Paid (₹)
-                  </label>
-                  <div className="flex gap-1.5">
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
+                {/* Input control to edit customer paid amount and payment mode */}
+                <div className="border-t border-slate-100 dark:border-slate-800 pt-2 mt-2 space-y-2">
+                  <div>
+                    <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-1">
+                      Update Payment Mode
+                    </label>
+                    <select
                       className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm bg-white dark:bg-slate-900 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-slate-400"
-                      value={editPaidAmount}
-                      onChange={(e) => setEditPaidAmount(e.target.value)}
-                      placeholder="Amount"
-                    />
-                    <button
-                      onClick={handleSavePayment}
-                      className="rounded-lg bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 px-3 py-1 text-xs font-medium transition"
+                      value={editPaymentMode}
+                      onChange={(e) => setEditPaymentMode(e.target.value)}
                     >
-                      Save
-                    </button>
+                      <option value="UPI">UPI</option>
+                      <option value="Cash">Cash</option>
+                      <option value="EMI">EMI</option>
+                      <option value="Card">Card</option>
+                      <option value="COD">COD</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-1">
+                      Update Amount Paid (₹)
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm bg-white dark:bg-slate-900 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-slate-400"
+                        value={editPaidAmount}
+                        onChange={(e) => setEditPaidAmount(e.target.value)}
+                        placeholder="Amount"
+                      />
+                      <button
+                        onClick={handleSavePayment}
+                        className="rounded-lg bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 px-3 py-1 text-xs font-medium transition"
+                      >
+                        Save
+                      </button>
+                    </div>
                   </div>
                 </div>
               </>

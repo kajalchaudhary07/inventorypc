@@ -993,7 +993,11 @@ export default function SalesOrders() {
         (o.salonName || "").toLowerCase().includes(q) ||
         (o.resolvedSalonName || "").toLowerCase().includes(q) ||
         (o.customerName || "").toLowerCase().includes(q) ||
-        (o.ownerName || "").toLowerCase().includes(q)
+        (o.ownerName || "").toLowerCase().includes(q) ||
+        (o.salesExecutive || "").toLowerCase().includes(q) ||
+        (o.createdBy || "").toLowerCase().includes(q) ||
+        (o.paymentMethod || "").toLowerCase().includes(q) ||
+        (o.paymentMode || "").toLowerCase().includes(q)
       );
     })
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -1268,8 +1272,10 @@ export default function SalesOrders() {
                         return <span>{salonName || custName || "-"}</span>;
                       })()}
                     </div>
-                    <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                      <StatusBadge value={o.channel} /> {o.lines.length} items ·{" "}
+                    <div className="flex items-center gap-1.5 text-xs text-slate-400 flex-wrap">
+                      <StatusBadge value={o.channel} />
+                      <span>{o.lines.length} items</span>
+                      <span>·</span>
                       <button
                         onClick={(e) => handlePaymentToggle(e, o)}
                         className="hover:scale-105 active:scale-95 transition cursor-pointer"
@@ -1277,6 +1283,22 @@ export default function SalesOrders() {
                       >
                         <Badge color={statusColor}>{statusText}</Badge>
                       </button>
+                      {(o.paymentMethod || o.paymentMode) && (
+                        <>
+                          <span>·</span>
+                          <span className="font-semibold text-slate-600 dark:text-slate-300">
+                            {String(o.paymentMethod || o.paymentMode).toUpperCase()}
+                          </span>
+                        </>
+                      )}
+                      {(o.salesExecutive || o.createdBy) && (
+                        <>
+                          <span>·</span>
+                          <span className="text-slate-500">
+                            Exec: <span className="font-semibold text-indigo-600 dark:text-indigo-400">{o.salesExecutive || o.createdBy}</span>
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="text-right flex flex-col justify-center items-end text-xs">

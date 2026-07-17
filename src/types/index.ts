@@ -123,6 +123,8 @@ export interface SalesOrder {
   inventoryStatus?: SalesStatus;
   paymentStatus: PaymentStatus;
   amountPaid?: number; // Persisted paid amount (Firestore)
+  paymentMethod?: string; // e.g., "Cash", "UPI", "EMI", "Card", "COD"
+  salesExecutive?: string; // name of the sales executive who created/managed the manual order
   customerId?: string;
   userId?: string;
   uid?: string;

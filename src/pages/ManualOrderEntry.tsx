@@ -6,6 +6,7 @@ import { Button, Card, Input, Textarea, Select, PageHeader, Field } from "@/comp
 import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
 import { useUIStore } from "@/store/uiStore";
+import { useAuthStore } from "@/store/authStore";
 import { createSalesOrder, saveDoc, logActivity } from "@/services/data";
 import { inr, uid } from "@/lib/utils";
 import { orderTotals } from "@/lib/calc";
@@ -21,6 +22,9 @@ interface SalonDraft {
   lines: OrderLine[];
   channel: SalesChannel;
   payment: PaymentStatus;
+  paymentMethod?: string;
+  manualAmountPaid?: number;
+  salesExecutive?: string;
   deliveryCharge?: number;
   updatedAt: number;
 }
@@ -43,14 +47,26 @@ export default function ManualOrderEntry() {
   const [drafts, setDrafts] = useState<Record<string, SalonDraft>>({});
 
   // Active order entry state
+  const currentUser = useAuthStore((s) => s.user);
   const [salonId, setSalonId] = useState("");
   const [channel, setChannel] = useState<SalesChannel>("manual");
   const [payment, setPayment] = useState<PaymentStatus>("Unpaid");
+  const [paymentMethod, setPaymentMethod] = useState("Cash");
+  const [manualAmountPaid, setManualAmountPaid] = useState<number>(0);
+  const [salesExecutive, setSalesExecutive] = useState("");
   const [deliveryCharge, setDeliveryCharge] = useState<number>(0);
   const [search, setSearch] = useState("");
   const [lines, setLines] = useState<OrderLine[]>([]);
   const [newSalonOpen, setNewSalonOpen] = useState(false);
   const [variantPickerProduct, setVariantPickerProduct] = useState<AnyRecord | null>(null);
+
+  // Default Sales Executive to logged-in user's name/email prefix
+  useEffect(() => {
+    if (currentUser?.email && !salesExecutive) {
+      const prefix = currentUser.email.split("@")[0];
+      setSalesExecutive(prefix.charAt(0).toUpperCase() + prefix.slice(1));
+    }
+  }, [currentUser, salesExecutive]);
 
   // Searchable combobox states & refs
   const [customerSearchQuery, setCustomerSearchQuery] = useState("");
@@ -185,12 +201,18 @@ export default function ManualOrderEntry() {
     const nextChannel = channel;
     const nextPayment = payment;
     const nextDeliveryCharge = deliveryCharge;
+    const nextPaymentMethod = paymentMethod;
+    const nextManualAmountPaid = manualAmountPaid;
+    const nextSalesExecutive = salesExecutive;
 
     if (
       JSON.stringify(current?.lines) !== JSON.stringify(nextLines) ||
       current?.channel !== nextChannel ||
       current?.payment !== nextPayment ||
-      current?.deliveryCharge !== nextDeliveryCharge
+      current?.deliveryCharge !== nextDeliveryCharge ||
+      current?.paymentMethod !== nextPaymentMethod ||
+      current?.manualAmountPaid !== nextManualAmountPaid ||
+      current?.salesExecutive !== nextSalesExecutive
     ) {
       const updated = {
         ...drafts,
@@ -200,13 +222,16 @@ export default function ManualOrderEntry() {
           lines: nextLines,
           channel: nextChannel,
           payment: nextPayment,
+          paymentMethod: nextPaymentMethod,
+          manualAmountPaid: nextManualAmountPaid,
+          salesExecutive: nextSalesExecutive,
           deliveryCharge: nextDeliveryCharge,
           updatedAt: Date.now(),
         },
       };
       saveAllDrafts(updated);
     }
-  }, [lines, channel, payment, deliveryCharge, salonId, view]);
+  }, [lines, channel, payment, deliveryCharge, salonId, view, paymentMethod, manualAmountPaid, salesExecutive]);
 
   // Handle switching salonId inside Order Entry
   const handleSalonChange = (newSalonId: string) => {
@@ -216,6 +241,9 @@ export default function ManualOrderEntry() {
       setLines(existing.lines || []);
       setChannel(existing.channel || "manual");
       setPayment(existing.payment || "Unpaid");
+      setPaymentMethod(existing.paymentMethod || "Cash");
+      setManualAmountPaid(existing.manualAmountPaid || 0);
+      setSalesExecutive(existing.salesExecutive || "");
       setDeliveryCharge(existing.deliveryCharge || 0);
     } else {
       const oldKey = salonId || "unsigned";
@@ -229,6 +257,9 @@ export default function ManualOrderEntry() {
           lines: oldDraft.lines,
           channel: oldDraft.channel,
           payment: oldDraft.payment,
+          paymentMethod: oldDraft.paymentMethod || paymentMethod,
+          manualAmountPaid: oldDraft.manualAmountPaid || manualAmountPaid,
+          salesExecutive: oldDraft.salesExecutive || salesExecutive,
           deliveryCharge: oldDraft.deliveryCharge,
           updatedAt: Date.now(),
         };
@@ -244,6 +275,14 @@ export default function ManualOrderEntry() {
     setLines([]);
     setChannel("manual");
     setPayment("Unpaid");
+    setPaymentMethod("Cash");
+    setManualAmountPaid(0);
+    if (currentUser?.email) {
+      const prefix = currentUser.email.split("@")[0];
+      setSalesExecutive(prefix.charAt(0).toUpperCase() + prefix.slice(1));
+    } else {
+      setSalesExecutive("");
+    }
     setDeliveryCharge(0);
     setView("entry");
   };
@@ -254,6 +293,9 @@ export default function ManualOrderEntry() {
     setLines(draft.lines || []);
     setChannel(draft.channel || "manual");
     setPayment(draft.payment || "Unpaid");
+    setPaymentMethod(draft.paymentMethod || "Cash");
+    setManualAmountPaid(draft.manualAmountPaid || 0);
+    setSalesExecutive(draft.salesExecutive || "");
     setDeliveryCharge(draft.deliveryCharge || 0);
     setView("entry");
   };
@@ -369,9 +411,22 @@ export default function ManualOrderEntry() {
       ? salon.name
       : (appCustomer.name || appCustomer.displayName || appCustomer.email || "Customer");
     
+    const finalAmountPaid = payment === "Paid" ? totals.total : payment === "Partial" ? manualAmountPaid : 0;
+
+    const now = new Date();
+    const yy = String(now.getFullYear()).slice(-2);
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let randomPart = "";
+    for (let i = 0; i < 5; i++) {
+      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    const generatedOrderNo = `SO-${yy}${mm}${dd}-${randomPart}`;
+
     await createSalesOrder({
       id: uid(),
-      orderNo: "SO-" + Math.floor(1000 + Math.random() * 9000),
+      orderNo: generatedOrderNo,
       salonId: salonId,
       salonName: customerName,
       channel,
@@ -380,6 +435,9 @@ export default function ManualOrderEntry() {
       extraCharges,
       status: "Pending",
       paymentStatus: payment,
+      amountPaid: finalAmountPaid,
+      paymentMethod: payment === "Unpaid" ? "" : paymentMethod,
+      salesExecutive: salesExecutive.trim(),
       createdAt: Date.now(),
     });
 
@@ -404,6 +462,9 @@ export default function ManualOrderEntry() {
     setSalonId("");
     setChannel("manual");
     setPayment("Unpaid");
+    setPaymentMethod("Cash");
+    setManualAmountPaid(0);
+    setSalesExecutive("");
     setDeliveryCharge(0);
     setView("dashboard");
     toast.success("Draft cleared");
@@ -710,18 +771,54 @@ export default function ManualOrderEntry() {
               const sel = salons.find((s) => s.id === salonId);
               return sel?.description ? <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800">{sel.description}</p> : null;
             })()}
+            <div className="mt-3">
+              <Field label="Sales Executive">
+                <Input
+                  value={salesExecutive}
+                  onChange={(e) => setSalesExecutive(e.target.value)}
+                  placeholder="Sales Executive Name"
+                />
+              </Field>
+            </div>
+
             <div className="mt-3 grid grid-cols-2 gap-3">
               <Field label="Channel">
                 <Select value={channel} onChange={(e) => setChannel(e.target.value as SalesChannel)}>
                   <option value="manual">Manual</option><option value="phone">Phone</option><option value="whatsapp">WhatsApp</option><option value="app">App</option>
                 </Select>
               </Field>
-              <Field label="Payment">
+              <Field label="Payment Status">
                 <Select value={payment} onChange={(e) => setPayment(e.target.value as PaymentStatus)}>
                   <option value="Unpaid">Unpaid</option><option value="Partial">Partial</option><option value="Paid">Paid</option>
                 </Select>
               </Field>
             </div>
+
+            {payment !== "Unpaid" && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <Field label="Payment Mode">
+                  <Select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+                    <option value="UPI">UPI</option>
+                    <option value="Cash">Cash</option>
+                    <option value="EMI">EMI</option>
+                    <option value="Card">Card</option>
+                    <option value="COD">COD</option>
+                  </Select>
+                </Field>
+                {payment === "Partial" && (
+                  <Field label="Amount Paid (₹)">
+                    <Input
+                      type="number"
+                      min="0"
+                      max={totals.total}
+                      value={manualAmountPaid || ""}
+                      onChange={(e) => setManualAmountPaid(Math.min(totals.total, Math.max(0, Number(e.target.value))))}
+                      placeholder="0.00"
+                    />
+                  </Field>
+                )}
+              </div>
+            )}
           </Card>
 
           <Card className="p-5">

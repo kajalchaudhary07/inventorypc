@@ -304,19 +304,22 @@ export function logActivity(action: string, entity: string, detail: string, enti
 }
 
 // Save payment amount for a sales order to Firestore
-export async function saveOrderPayment(orderId: string, amountPaid: number) {
+export async function saveOrderPayment(orderId: string, amountPaid: number, paymentMethod?: string) {
   const now = Date.now();
+  const updateData: any = { amountPaid, updatedAt: now };
+  if (paymentMethod !== undefined) {
+    updateData.paymentMethod = paymentMethod;
+  }
+
   // Save to salesOrders collection
   if (isFirebaseConfigured && db) {
     try {
       // Try updating salesOrders doc first
-      await updateDoc(doc(db, "salesOrders", orderId), { amountPaid, updatedAt: now });
+      await updateDoc(doc(db, "salesOrders", orderId), updateData);
     } catch {
       // If salesOrders doc doesn't exist, create it with merge
-      await setDoc(doc(db, "salesOrders", orderId), { amountPaid, updatedAt: now }, { merge: true });
+      await setDoc(doc(db, "salesOrders", orderId), updateData, { merge: true });
     }
-
-
   }
 
   // Also update localStorage for backward compatibility
@@ -332,19 +335,22 @@ export async function saveOrderPayment(orderId: string, amountPaid: number) {
   const salesOrders = state.salesOrders || [];
   const exists = salesOrders.some((o: any) => o.id === orderId);
   const updatedSO = exists
-    ? salesOrders.map((o: any) => o.id === orderId ? { ...o, amountPaid, updatedAt: now } : o)
-    : [{ id: orderId, amountPaid, updatedAt: now }, ...salesOrders];
+    ? salesOrders.map((o: any) => o.id === orderId ? { ...o, ...updateData } : o)
+    : [{ id: orderId, ...updateData }, ...salesOrders];
   state.setCollection("salesOrders", updatedSO);
 
   // Also update adminOrders in local state
   const adminOrders = state.adminOrders || [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updatedAO = adminOrders.map((o: any) =>
-    o.id === orderId ? { ...o, amountPaid, updatedAt: now } : o
+    o.id === orderId ? { ...o, ...updateData } : o
   );
   state.setCollection("adminOrders", updatedAO);
 
-  logActivity("Payment updated", "salesOrder", `Amount paid: ₹${amountPaid}`, orderId);
+  const logDetail = paymentMethod 
+    ? `Amount paid: ₹${amountPaid} · Mode: ${paymentMethod}`
+    : `Amount paid: ₹${amountPaid}`;
+  logActivity("Payment updated", "salesOrder", logDetail, orderId);
 }
 
 // Save payment amount for a purchase order to Firestore
