@@ -458,8 +458,8 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
 
 
 
-  // Handle stock transitions based on decremented status groups
-  const DECREMENTED_STATUSES = ["Delivered", "Cancelled"];
+  // Handle stock transitions based on decremented status groups (Stock is deducted ONLY when Delivered)
+  const DECREMENTED_STATUSES = ["Delivered"];
   const wasDecremented = DECREMENTED_STATUSES.includes(order.status);
   const isDecremented = DECREMENTED_STATUSES.includes(status);
 
