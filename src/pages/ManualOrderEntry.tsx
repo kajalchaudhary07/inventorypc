@@ -1,17 +1,18 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Search, Plus, Minus, Trash2, ShoppingCart, Store, UserPlus, ChevronRight, ArrowLeft, Play, Trash, ChevronDown } from "lucide-react";
+import { Search, Plus, Minus, Trash2, ShoppingCart, Store, UserPlus, ChevronRight, ArrowLeft, Play, Trash, ChevronDown, X } from "lucide-react";
 import { Button, Card, Input, Textarea, Select, PageHeader, Field } from "@/components/ui/primitives";
 import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
 import { useUIStore } from "@/store/uiStore";
 import { useAuthStore } from "@/store/authStore";
 import { createSalesOrder, saveDoc, logActivity } from "@/services/data";
-import { inr, uid } from "@/lib/utils";
+import { inr, uid, normalizeSearchText, calculateCustomerMatchScore } from "@/lib/utils";
 import { orderTotals } from "@/lib/calc";
 import type { OrderLine, PaymentStatus, SalesChannel, Salon } from "@/types";
 import { getMergedProducts } from "@/services/productOverrides";
+import { isRecordActive, getBinItems } from "@/services/recycleBin";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyRecord = Record<string, any>;
@@ -37,10 +38,12 @@ export default function ManualOrderEntry() {
   const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
   const defaultGst = useUIStore((s) => s.settings.defaultGst);
 
-  const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
-  const adminProducts = useMemo(() => rawAdminProducts.filter((p: any) => p.isDeleted !== true), [rawAdminProducts]);
-  const inventoryProducts = useMemo(() => rawInventoryProducts.filter((p: any) => p.isDeleted !== true), [rawInventoryProducts]);
-  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
+  const binIds = useMemo(() => new Set(getBinItems().map((b) => b.id)), []);
+
+  const salons = useMemo(() => rawSalons.filter((s: any) => isRecordActive(s, binIds)), [rawSalons, binIds]);
+  const adminProducts = useMemo(() => rawAdminProducts.filter((p: any) => isRecordActive(p, binIds)), [rawAdminProducts, binIds]);
+  const inventoryProducts = useMemo(() => rawInventoryProducts.filter((p: any) => isRecordActive(p, binIds)), [rawInventoryProducts, binIds]);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => isRecordActive(c, binIds)), [rawAdminCustomers, binIds]);
 
   // View state: "dashboard" or "entry"
   const [view, setView] = useState<"dashboard" | "entry">("dashboard");
@@ -159,20 +162,27 @@ export default function ManualOrderEntry() {
     return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, [salonId, combinedCustomersList]);
 
-  // Fuzzy multi-attribute filter matching criteria
+  // Fuzzy multi-attribute filter matching & relevance ranking
   const filteredCustomers = useMemo(() => {
-    const q = customerSearchQuery.trim().toLowerCase();
+    const q = customerSearchQuery.trim();
     if (!q) return combinedCustomersList;
 
-    return combinedCustomersList.filter((item) => {
-      const nameMatch = item.name.toLowerCase().includes(q);
-      const ownerMatch = item.ownerName.toLowerCase().includes(q);
-      const phoneMatch = item.phone.toLowerCase().includes(q);
-      const emailMatch = item.email.toLowerCase().includes(q);
-      const gstinMatch = item.gstin.toLowerCase().includes(q);
+    const scored = combinedCustomersList
+      .map((item) => ({
+        item,
+        score: calculateCustomerMatchScore(q, item),
+      }))
+      .filter(({ score }) => score > 0);
 
-      return nameMatch || ownerMatch || phoneMatch || emailMatch || gstinMatch;
+    // Sort descending by relevance score, then shorter name, then alphabetical
+    scored.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const lenDiff = (a.item.name || "").length - (b.item.name || "").length;
+      if (lenDiff !== 0) return lenDiff;
+      return (a.item.name || "").localeCompare(b.item.name || "");
     });
+
+    return scored.map(({ item }) => item);
   }, [combinedCustomersList, customerSearchQuery]);
 
   // ── Load all drafts from localStorage on mount ───────────────────────────
@@ -331,41 +341,52 @@ export default function ManualOrderEntry() {
   }, [mergedAdminProducts, inventoryProducts]);
 
   const matches = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim();
     if (!q) return [];
 
-    const tokens = q.split(/\s+/).filter(Boolean);
+    const normQ = normalizeSearchText(q);
+    const tokens = normQ.split(" ").filter(Boolean);
     if (tokens.length === 0) return [];
 
     return allProducts
-      .filter((p: AnyRecord) => {
-        if (p.status === "archived") return false;
+      .map((p: AnyRecord) => {
+        if (p.status === "archived") return { p, score: 0 };
 
-        const name = (p.name || "").toLowerCase();
-        const sku = (p.sku || "").toLowerCase();
-        const brand = (p.brand || "").toLowerCase();
-        const category = (p.category || p.categoryName || "").toLowerCase();
+        const name = normalizeSearchText(p.name || "");
+        const sku = normalizeSearchText(p.sku || "");
+        const brand = normalizeSearchText(p.brand || "");
+        const category = normalizeSearchText(p.category || p.categoryName || "");
         const barcode = (p.barcode || "").toLowerCase();
 
-        return tokens.every((token) => {
-          const inMain = name.includes(token) ||
-                         sku.includes(token) ||
-                         brand.includes(token) ||
-                         category.includes(token) ||
-                         barcode.includes(token);
-          if (inMain) return true;
+        let score = 0;
+        if (name === normQ || sku === normQ) {
+          score = 1000;
+        } else if (name.startsWith(normQ) || sku.startsWith(normQ)) {
+          score = 800 - Math.min(200, (name.length - normQ.length) * 2);
+        } else if (tokens.every((t) => name.includes(t) || sku.includes(t) || brand.includes(t) || category.includes(t) || barcode.includes(t))) {
+          score = 300;
+        }
 
-          // Check if it matches in any variant
-          if (p.variants && Array.isArray(p.variants)) {
-            return p.variants.some((v: any) => {
-              const vName = (v.name || v.shadeName || v.value || "").toLowerCase();
-              const vSku = (v.sku || "").toLowerCase();
-              return vName.includes(token) || vSku.includes(token);
-            });
-          }
-          return false;
-        });
+        // Check if it matches in any variant
+        if (p.variants && Array.isArray(p.variants)) {
+          p.variants.forEach((v: any) => {
+            const vName = normalizeSearchText(v.name || v.shadeName || v.value || "");
+            const vSku = normalizeSearchText(v.sku || "");
+            if (vName === normQ || vSku === normQ) {
+              score = Math.max(score, 950);
+            } else if (vName.startsWith(normQ) || vSku.startsWith(normQ)) {
+              score = Math.max(score, 750);
+            } else if (tokens.every((t) => vName.includes(t) || vSku.includes(t))) {
+              score = Math.max(score, 250);
+            }
+          });
+        }
+
+        return { p, score };
       })
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(({ p }) => p)
       .slice(0, 15);
   }, [search, allProducts]);
 
@@ -665,18 +686,85 @@ export default function ManualOrderEntry() {
                     setIsDropdownOpen(true);
                   }}
                   placeholder="— select customer —"
-                  className="pr-10"
+                  className="pr-16"
                 />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                  <ChevronDown size={16} />
+                <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 text-slate-400">
+                  {customerSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCustomerSearchQuery("");
+                        setSalonId("");
+                        setIsDropdownOpen(true);
+                      }}
+                      className="p-1 hover:text-slate-600 dark:hover:text-slate-200 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition"
+                      title="Clear customer"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                  <ChevronDown size={16} className="pointer-events-none" />
                 </div>
               </div>
 
               {isDropdownOpen && (
-                <div className="absolute left-0 z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                <div className="absolute left-0 z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
                   {filteredCustomers.length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-slate-400 text-center">No matches found</div>
+                    <div className="px-3 py-4 text-sm text-slate-400 text-center">No matching salons or customers found</div>
+                  ) : customerSearchQuery.trim() ? (
+                    /* When Searching: Pure relevance-ranked list */
+                    <div>
+                      <div className="bg-slate-50 dark:bg-slate-700/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center justify-between">
+                        <span>Matched Results ({filteredCustomers.length})</span>
+                        <span className="text-[9px] font-normal lowercase">top matches first</span>
+                      </div>
+                      {filteredCustomers.map((s) => {
+                        const isSelected = s.id === salonId;
+                        const matchDetails = [
+                          s.ownerName && `Owner: ${s.ownerName}`,
+                          s.phone && `Phone: ${s.phone}`,
+                          s.email && `Email: ${s.email}`,
+                          s.gstin && `GSTIN: ${s.gstin}`,
+                        ].filter(Boolean).join(" | ");
+
+                        return (
+                          <button
+                            key={`${s.type}-${s.id}`}
+                            type="button"
+                            onClick={() => {
+                              handleSalonChange(s.id);
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors ${
+                              isSelected 
+                                ? "bg-indigo-50 dark:bg-indigo-950/40 text-indigo-950 dark:text-indigo-200" 
+                                : "text-slate-700 dark:text-slate-300"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-medium truncate">{s.name}</span>
+                              <span
+                                className={`inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+                                  s.type === "B2B"
+                                    ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+                                    : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                                }`}
+                              >
+                                {s.type === "B2B" ? "B2B Salon" : "App Customer"}
+                              </span>
+                            </div>
+                            {matchDetails && (
+                              <span className="text-[10px] text-slate-400 truncate w-full mt-0.5">
+                                {matchDetails}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                   ) : (
+                    /* When Query is Empty: Grouped by account type */
                     <>
                       {/* B2B Salons Group */}
                       {filteredCustomers.some(x => x.type === "B2B") && (

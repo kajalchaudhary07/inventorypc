@@ -3,6 +3,8 @@ import { Users, Search } from "lucide-react";
 import { useDataStore } from "@/store/dataStore";
 import { Button, Card, PageHeader, Input } from "@/components/ui/primitives";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { calculateCustomerMatchScore } from "@/lib/utils";
+import { isRecordActive, getBinItems } from "@/services/recycleBin";
 
 interface AppCustomer {
   id: string;
@@ -44,20 +46,34 @@ const formatDate = (timestamp: number | null | undefined) => {
 export default function AppCustomersPage() {
   const [search, setSearch] = useState("");
   const rawAdminCustomers = useDataStore((state: any) => state.adminCustomers || []);
-  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
+  const binIds = useMemo(() => new Set(getBinItems().map((b) => b.id)), []);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => isRecordActive(c, binIds)), [rawAdminCustomers, binIds]);
   const customers = useMemo(() => adminCustomers, [adminCustomers]) as AppCustomer[];
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim();
     if (!q) return customers;
 
-    return customers.filter((c) => {
-      const cSalonName = extractSalonName(c).toLowerCase();
-      const cOwnerName = extractOwnerName(c).toLowerCase();
-      const cPhone = extractPhone(c).toLowerCase();
-      const cEmail = extractEmail(c).toLowerCase();
-      return cSalonName.includes(q) || cOwnerName.includes(q) || cPhone.includes(q) || cEmail.includes(q);
-    });
+    const scored = customers
+      .map((c) => {
+        const cSalonName = extractSalonName(c);
+        const cOwnerName = extractOwnerName(c);
+        const cPhone = extractPhone(c);
+        const cEmail = extractEmail(c);
+
+        const score = calculateCustomerMatchScore(q, {
+          name: cSalonName,
+          ownerName: cOwnerName,
+          phone: cPhone,
+          email: cEmail,
+        });
+
+        return { c, score };
+      })
+      .filter(({ score }) => score > 0);
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored.map(({ c }) => c);
   }, [customers, search]);
 
   return (

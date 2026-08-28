@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-table";
 import { ChevronLeft, ChevronRight, Search, ArrowUpDown } from "lucide-react";
 import { Input } from "./primitives";
+import { normalizeSearchText } from "@/lib/utils";
 
 interface Props<T> {
   data: T[];
@@ -37,12 +38,17 @@ export function DataTable<T>({ data, columns, searchPlaceholder = "Search…", p
     getPaginationRowModel: getPaginationRowModel(),
     initialState: { pagination: { pageSize } },
     globalFilterFn: (row, _columnId, filterValue) => {
-      const q = String(filterValue).trim().toLowerCase();
-      if (!q) return true;
+      const rawQ = String(filterValue).trim();
+      if (!rawQ) return true;
+      const normQ = normalizeSearchText(rawQ);
+      const tokens = normQ.split(" ").filter(Boolean);
+      if (tokens.length === 0) return true;
+
       const searchObj = (obj: any): boolean => {
         if (obj == null) return false;
         if (typeof obj === "string" || typeof obj === "number" || typeof obj === "boolean") {
-          return String(obj).toLowerCase().includes(q);
+          const val = normalizeSearchText(String(obj));
+          return tokens.every((t) => val.includes(t));
         }
         if (Array.isArray(obj)) {
           return obj.some(searchObj);

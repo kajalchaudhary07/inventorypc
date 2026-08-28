@@ -98,3 +98,158 @@ export function getOrderPaymentInfo(order: any) {
   };
 }
 
+/**
+ * Normalizes text for search matching:
+ * - Lowercases and trims
+ * - Unicode normalization (NFD) stripping accents
+ * - Normalizes apostrophes (' ’ ‘ ʻ ʼ ´ `) -> stripped so "men's" matches "mens"
+ * - Normalizes hyphens, dashes, slashes, underscores -> spaces
+ * - Replaces any non-alphanumeric punctuation with spaces
+ * - Collapses consecutive whitespace into a single space
+ */
+export function normalizeSearchText(str: string | null | undefined): string {
+  if (!str) return "";
+  return String(str)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/['’‘ʻʼ´`]/g, "")
+    .replace(/[-–—_./\\,;:!@#$%^&*()[\]{}|<>?+=~]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export interface CustomerSearchable {
+  name?: string;
+  ownerName?: string;
+  phone?: string;
+  email?: string;
+  gstin?: string;
+  type?: string;
+  description?: string;
+  [key: string]: any;
+}
+
+/**
+ * Calculates a relevance score for a customer item given a user search query.
+ * Returns > 0 if matched (higher = more relevant), 0 if no match.
+ */
+export function calculateCustomerMatchScore(query: string, item: CustomerSearchable): number {
+  if (!query || !query.trim()) return 1;
+
+  const rawQ = query.trim().toLowerCase();
+  const normQ = normalizeSearchText(query);
+  if (!normQ) return 0;
+
+  const qTokens = normQ.split(" ").filter(Boolean);
+  const qDigits = rawQ.replace(/\D/g, "");
+
+  const name = item.name || "";
+  const normName = normalizeSearchText(name);
+  const nameTokens = normName.split(" ").filter(Boolean);
+
+  const ownerName = item.ownerName || "";
+  const normOwner = normalizeSearchText(ownerName);
+  const ownerTokens = normOwner.split(" ").filter(Boolean);
+
+  const phone = item.phone || "";
+  const phoneDigits = phone.replace(/\D/g, "");
+
+  const email = item.email || "";
+  const normEmail = normalizeSearchText(email);
+
+  const gstin = item.gstin || "";
+  const normGstin = normalizeSearchText(gstin);
+
+  let score = 0;
+
+  // 1. Exact Full Name Match (normalized)
+  if (normName === normQ) {
+    return 10000;
+  }
+
+  // 2. Name Starts With Normalized Query (e.g. "S Men's Salon" starts with "s mens")
+  if (normName.startsWith(normQ)) {
+    const penalty = Math.min(500, (normName.length - normQ.length) * 2);
+    score = Math.max(score, 8000 - penalty);
+  }
+
+  // 3. Name starts with raw query (case-insensitive bonus)
+  if (name.toLowerCase().startsWith(rawQ)) {
+    score = Math.max(score, 8200);
+  }
+
+  // 4. Consecutive Word-Prefix Matching on Name:
+  // e.g. Query "s men" matches Name ["s", "mens", "salon"] where word 0 starts with "s", word 1 starts with "men"
+  if (qTokens.length > 0 && nameTokens.length >= qTokens.length) {
+    const isConsecutivePrefix = qTokens.every((token, idx) => nameTokens[idx]?.startsWith(token));
+    if (isConsecutivePrefix) {
+      score = Math.max(score, 6500);
+    }
+  }
+
+  // 5. Word-boundary exact match in Name (e.g. word somewhere in name starts with full normQ)
+  if (nameTokens.some(tok => tok.startsWith(normQ))) {
+    score = Math.max(score, 5000);
+  }
+
+  // 6. All query tokens match the prefix of distinct words in Name
+  if (qTokens.length > 0) {
+    const allTokensPrefixMatch = qTokens.every((token) =>
+      nameTokens.some((word) => word.startsWith(token))
+    );
+    if (allTokensPrefixMatch) {
+      score = Math.max(score, 4000);
+    }
+  }
+
+  // 7. All query tokens are substrings anywhere in Name
+  if (qTokens.length > 0) {
+    const allTokensInName = qTokens.every((token) => normName.includes(token));
+    if (allTokensInName) {
+      score = Math.max(score, 2500);
+    }
+  }
+
+  // 8. Phone Number Match
+  if (qDigits.length >= 3) {
+    if (phoneDigits.startsWith(qDigits)) {
+      score = Math.max(score, 3500);
+    } else if (phoneDigits.includes(qDigits)) {
+      score = Math.max(score, 1800);
+    }
+  }
+
+  // 9. Owner Name Match
+  if (normOwner) {
+    if (normOwner === normQ) {
+      score = Math.max(score, 5500);
+    } else if (normOwner.startsWith(normQ)) {
+      score = Math.max(score, 3800);
+    } else if (qTokens.every((tok) => normOwner.includes(tok) || ownerTokens.some((w) => w.startsWith(tok)))) {
+      score = Math.max(score, 2000);
+    }
+  }
+
+  // 10. Email / GSTIN Match
+  if (normEmail && (normEmail.startsWith(normQ) || normEmail.includes(normQ))) {
+    score = Math.max(score, 1200);
+  }
+  if (normGstin && (normGstin.startsWith(normQ) || normGstin.includes(normQ))) {
+    score = Math.max(score, 1200);
+  }
+
+  // 11. Across-all-fields fallback token match
+  const combinedText = `${normName} ${normOwner} ${phoneDigits} ${normEmail} ${normGstin}`;
+  if (qTokens.length > 0 && qTokens.every((tok) => combinedText.includes(tok))) {
+    score = Math.max(score, 800);
+  }
+
+  // 12. Fallback Substring in Raw Name (e.g. "look[s men's]")
+  if (score === 0 && name.toLowerCase().includes(rawQ)) {
+    score = 50;
+  }
+
+  return score;
+}
+

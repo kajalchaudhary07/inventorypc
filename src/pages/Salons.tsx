@@ -12,8 +12,8 @@ import { useDataStore } from "@/store/dataStore";
 import { saveDoc, logActivity } from "@/services/data";
 import { db } from "@/lib/firebase";
 import { deleteDoc, doc, updateDoc } from "firebase/firestore";
-import { deleteToBin } from "@/services/recycleBin";
-import { inr, num, uid, getOrderPaymentInfo } from "@/lib/utils";
+import { deleteToBin, isRecordActive, getBinItems } from "@/services/recycleBin";
+import { inr, num, uid, getOrderPaymentInfo, normalizeSearchText, calculateCustomerMatchScore } from "@/lib/utils";
 import type { Salon } from "@/types";
 import { mergeOrders } from "@/services/orderMerger";
 
@@ -382,10 +382,13 @@ const SALON_STATUSES = ["Active", "Inactive", "Pending Approval", "Suspended", "
 export default function Salons() {
   const { salons: rawSalons, salesOrders: rawSalesOrders } = useDataStore();
   const rawAdminOrders = useDataStore((s: any) => s.adminOrders || []);
-  const salons = useMemo(() => rawSalons.filter((s: any) => s.isDeleted !== true), [rawSalons]);
-  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => o.isDeleted !== true), [rawAdminOrders]);
   const rawAdminCustomers = useDataStore((s: any) => s.adminCustomers || []);
-  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => c.isDeleted !== true), [rawAdminCustomers]);
+
+  const binIds = useMemo(() => new Set(getBinItems().map((b) => b.id)), []);
+
+  const salons = useMemo(() => rawSalons.filter((s: any) => isRecordActive(s, binIds)), [rawSalons, binIds]);
+  const adminOrders = useMemo(() => rawAdminOrders.filter((o: any) => isRecordActive(o, binIds)), [rawAdminOrders, binIds]);
+  const adminCustomers = useMemo(() => rawAdminCustomers.filter((c: any) => isRecordActive(c, binIds)), [rawAdminCustomers, binIds]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Salon | null>(null);
   const [detailsSalon, setDetailsSalon] = useState<Salon | null>(null);
@@ -537,15 +540,29 @@ export default function Salons() {
   };
 
   const filteredCustomers = useMemo(() => {
-    const q = customerSearch.trim().toLowerCase();
+    const q = customerSearch.trim();
     if (!q) return adminCustomers;
-    return adminCustomers.filter((c: any) => {
-      const cName = (extractName(c) || "").toLowerCase();
-      const cPhone = (extractPhone(c) || "").toLowerCase();
-      const cEmail = (extractEmail(c) || "").toLowerCase();
-      const cSalon = (getCustomerSalonName(c, salons) || "").toLowerCase();
-      return cName.includes(q) || cPhone.includes(q) || cEmail.includes(q) || cSalon.includes(q);
-    });
+
+    const scored: Array<{ c: any; score: number }> = adminCustomers
+      .map((c: any) => {
+        const cSalon = getCustomerSalonName(c, salons) || extractSalonName(c) || "";
+        const cOwner = extractOwnerName(c) || getField(c, ["name", "displayName"]) || "";
+        const cPhone = extractPhone(c) || "";
+        const cEmail = extractEmail(c) || "";
+
+        const score = calculateCustomerMatchScore(q, {
+          name: cSalon,
+          ownerName: cOwner,
+          phone: cPhone,
+          email: cEmail,
+        });
+
+        return { c, score };
+      })
+      .filter((entry: { c: any; score: number }) => entry.score > 0);
+
+    scored.sort((a: { c: any; score: number }, b: { c: any; score: number }) => b.score - a.score);
+    return scored.map((entry: { c: any; score: number }) => entry.c);
   }, [adminCustomers, customerSearch, salons]);
 
   return (

@@ -38,6 +38,20 @@ export const saveBinItems = (items: BinItem[]) => {
   }
 };
 
+/**
+ * Checks if a record is active and NOT soft-deleted.
+ * Cross-references deletion flags, archived status, and the Recycle Bin.
+ */
+export const isRecordActive = (item: any, binIds?: Set<string>): boolean => {
+  if (!item || !item.id) return false;
+  if (binIds && binIds.has(item.id)) return false;
+  if (item.isDeleted === true || item.isDeleted === "true") return false;
+  if (item.deleted === true || item.deleted === "true") return false;
+  if (item.isPermanentlyDeleted === true || item.isPermanentlyDeleted === "true") return false;
+  if (item.status === "deleted" || item.status === "Archived" || item.status === "archived") return false;
+  return true;
+};
+
 export const pruneBinItems = () => {
   const items = getBinItems();
   const now = Date.now();
