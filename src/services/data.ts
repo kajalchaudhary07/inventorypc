@@ -399,11 +399,22 @@ export async function createSalesOrder(o: SalesOrder) {
 export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
   const now = Date.now();
   // Stamp the moment this status was first reached (don't overwrite existing).
-  const stamp: Partial<SalesOrder> = { updatedAt: now };
+  const stamp: any = { updatedAt: now };
   if (status === "Packed" && !order.packedAt) stamp.packedAt = now;
   if (status === "Delivered" && !order.deliveredAt) stamp.deliveredAt = now;
   if (status === "Cancelled" && !order.cancelledAt) stamp.cancelledAt = now;
   if (status === "Returned" && !order.returnedAt) stamp.returnedAt = now;
+
+  // Handle stock transitions based on decremented status groups (Stock is deducted ONLY when Delivered)
+  const DECREMENTED_STATUSES = ["Delivered"];
+  const wasDecremented = DECREMENTED_STATUSES.includes(order.status);
+  const isDecremented = DECREMENTED_STATUSES.includes(status);
+
+  if (isDecremented && !wasDecremented) {
+    stamp.inventoryReduced = true;
+  } else if (!isDecremented && wasDecremented) {
+    stamp.inventoryReduced = false;
+  }
 
   if (isFirebaseConfigured && db) {
     await setDoc(doc(db, "salesOrders", order.id), { inventoryStatus: status, ...stamp }, { merge: true });
@@ -419,6 +430,7 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
           status: status,
           orderStatus: status,
           updatedAt: now,
+          ...(stamp.inventoryReduced !== undefined ? { inventoryReduced: stamp.inventoryReduced } : {}),
         });
       } catch (err) {
         console.warn(`Failed to update status in 'orders' via updateDoc, trying setDoc:`, err);
@@ -427,6 +439,7 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
             status: status,
             orderStatus: status,
             updatedAt: now,
+            ...(stamp.inventoryReduced !== undefined ? { inventoryReduced: stamp.inventoryReduced } : {}),
           }, { merge: true });
         } catch (err2) {
           console.error(`Failed to update status in 'orders' collection:`, err2);
@@ -456,17 +469,11 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
     state.setCollection("adminOrders", updatedAO);
   }
 
-
-
-  // Handle stock transitions based on decremented status groups (Stock is deducted ONLY when Delivered)
-  const DECREMENTED_STATUSES = ["Delivered"];
-  const wasDecremented = DECREMENTED_STATUSES.includes(order.status);
-  const isDecremented = DECREMENTED_STATUSES.includes(status);
-
   if (isDecremented && !wasDecremented) {
     // Transition from non-decremented to decremented -> Decrement stock
     for (const line of order.lines) {
-      const [pId, vId] = line.productId.split("__");
+      const separator = line.productId.includes("::") ? "::" : "__";
+      const [pId, vId] = line.productId.split(separator);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const state = useDataStore.getState() as any;
       const adminProducts = state.adminProducts || [];
@@ -482,7 +489,8 @@ export async function setOrderStatus(order: SalesOrder, status: SalesStatus) {
     const reason = status === "Returned" ? `Customer return (Order ${order.orderNo})` : `Order reverted to ${status} (Order ${order.orderNo})`;
 
     for (const line of order.lines) {
-      const [pId, vId] = line.productId.split("__");
+      const separator = line.productId.includes("::") ? "::" : "__";
+      const [pId, vId] = line.productId.split(separator);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const state = useDataStore.getState() as any;
       const adminProducts = state.adminProducts || [];

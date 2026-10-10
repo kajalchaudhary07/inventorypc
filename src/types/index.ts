@@ -26,6 +26,7 @@ export interface Product {
   attributes?: Record<string, string>; // { Size: "250ml", Shade: "Black" }
   expiryTracking?: boolean;
   isInventoryOnly?: boolean; // true if only for inventory dashboard, not visible in app
+  isEmergencyEligible?: boolean; // true if available for 2-hour emergency delivery catalog
   status: EntityStatus;
   createdAt: number;
   updatedAt: number;
@@ -137,6 +138,11 @@ export interface SalesOrder {
   expectedDelivery?: number; // admin-entered expected delivery date (timestamp)
   deliveryEnabled?: boolean; // explicit flag to enable/disable delivery charges and address details
   detailFields?: DetailFieldsConfig; // saved UI toggles for invoice printing/sharing
+  // Emergency delivery fields (Express 2h SLA)
+  deliveryType?: "standard" | "emergency";
+  isEmergency?: boolean;
+  targetSLA?: number; // Target delivery timestamp (createdAt + 2 hours)
+  emergencyFee?: number;
   // Timestamps recorded as the order moves through its lifecycle. Used for
   // order-fulfillment time and delivery-success metrics.
   packedAt?: number;
