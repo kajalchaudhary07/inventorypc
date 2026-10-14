@@ -1,15 +1,15 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import toast from "react-hot-toast";
-import { Plus, FileText, Printer, Pencil, Save, X, MessageCircle, Trash2, Search, PackagePlus, Bell, Copy, Truck, Eye } from "lucide-react";
+import { Plus, FileText, Printer, Pencil, Save, X, MessageCircle, Trash2, Search, PackagePlus, Bell, Copy, Truck, Eye, Calendar, Filter, Clock, Zap } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button, Card, Input, Textarea, Select, PageHeader, Badge, Field } from "@/components/ui/primitives";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Modal } from "@/components/ui/Modal";
 import { useDataStore } from "@/store/dataStore";
 import { useUIStore } from "@/store/uiStore";
-import { setOrderStatus, updateOrderPricing, saveDoc, logActivity, saveOrderPayment } from "@/services/data";
+import { setOrderStatus, updateOrderPricing, saveDoc, logActivity, saveOrderPayment, saveOrderDeliveryDate } from "@/services/data";
 import { deleteToBin } from "@/services/recycleBin";
-import { inr, fmtDateTime, uid, getOrderPaymentInfo } from "@/lib/utils";
+import { inr, fmtDateTime, fmtDate, uid, getOrderPaymentInfo } from "@/lib/utils";
 import { lineGst, lineNet, lineProfit, orderTotals } from "@/lib/calc";
 import { printInvoice, shareInvoiceWhatsapp } from "@/lib/invoice";
 import { paymentReminderDraft, orderUpdateDraft, shareTextWhatsapp } from "@/lib/messages";
@@ -927,26 +927,193 @@ export default function SalesOrders() {
     };
   }, [orders, rawSalesOrders]);
 
-  const [statusTab, setStatusTab] = useState("all");
-  const [channel, setChannel] = useState("all");
-  const [paymentFilter, setPaymentFilter] = useState<"all" | "Paid" | "Unpaid" | "Partial">("all");
+  // Persistent Filter State across navigation
+  const initialFilters = useMemo(() => {
+    try {
+      const raw = sessionStorage.getItem("pc_sales_orders_filters") || localStorage.getItem("pc_sales_orders_filters");
+      if (raw) return JSON.parse(raw);
+    } catch { /* ignore */ }
+    return {};
+  }, []);
+
+  // Filter States (Multi-select OR logic within categories)
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(initialFilters.selectedStatuses || []);
+  const [channel, setChannel] = useState<string>(initialFilters.channel || "all");
+  const [selectedPayments, setSelectedPayments] = useState<string[]>(initialFilters.selectedPayments || []);
   const [invoice, setInvoice] = useState<SalesOrder | null>(null);
   const [notify, setNotify] = useState<SalesOrder | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [deliveryModalOrder, setDeliveryModalOrder] = useState<SalesOrder | null>(null);
 
-  const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">("all");
-  const [customStart, setCustomStart] = useState("");
-  const [customEnd, setCustomEnd] = useState("");
-  const [statsMode, setStatsMode] = useState<"paid" | "all">("paid");
+  // Omnibox Search State with Target Field
+  const [searchQuery, setSearchQuery] = useState<string>(initialFilters.searchQuery || "");
+  const [searchTarget, setSearchTarget] = useState<"all" | "salon" | "orderNo" | "product">(initialFilters.searchTarget || "all");
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
-  const [amountFilter, setAmountFilter] = useState<"all" | "under5k" | "5k-20k" | "over20k" | "custom">("all");
-  const [customMinAmount, setCustomMinAmount] = useState("");
-  const [customMaxAmount, setCustomMaxAmount] = useState("");
+  // Date Filtering State with Basis (Placed vs Delivery vs Expected)
+  const [dateBasis, setDateBasis] = useState<"placed" | "delivered" | "expected">(initialFilters.dateBasis || "placed");
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month" | "custom">(initialFilters.dateFilter || "all");
+  const [customStart, setCustomStart] = useState<string>(initialFilters.customStart || "");
+  const [customEnd, setCustomEnd] = useState<string>(initialFilters.customEnd || "");
+
+  // Quick Preset Shortcuts
+  const [activePreset, setActivePreset] = useState<string | null>(initialFilters.activePreset ?? null);
+
+  const [statsMode, setStatsMode] = useState<"paid" | "all">(initialFilters.statsMode || "paid");
+  const [amountFilter, setAmountFilter] = useState<"all" | "under5k" | "5k-20k" | "over20k" | "custom">(initialFilters.amountFilter || "all");
+  const [customMinAmount, setCustomMinAmount] = useState<string>(initialFilters.customMinAmount || "");
+  const [customMaxAmount, setCustomMaxAmount] = useState<string>(initialFilters.customMaxAmount || "");
+
+  // Synchronize active filters to storage so they survive page navigation
+  useEffect(() => {
+    const toSave = {
+      selectedStatuses,
+      channel,
+      selectedPayments,
+      searchQuery,
+      searchTarget,
+      dateBasis,
+      dateFilter,
+      customStart,
+      customEnd,
+      amountFilter,
+      customMinAmount,
+      customMaxAmount,
+      activePreset,
+      statsMode,
+    };
+    try {
+      const json = JSON.stringify(toSave);
+      sessionStorage.setItem("pc_sales_orders_filters", json);
+      localStorage.setItem("pc_sales_orders_filters", json);
+    } catch { /* ignore */ }
+  }, [
+    selectedStatuses,
+    channel,
+    selectedPayments,
+    searchQuery,
+    searchTarget,
+    dateBasis,
+    dateFilter,
+    customStart,
+    customEnd,
+    amountFilter,
+    customMinAmount,
+    customMaxAmount,
+    activePreset,
+    statsMode,
+  ]);
+
+  // Close search dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setShowSearchDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const toggleStatus = (status: string) => {
+    setActivePreset(null);
+    if (status === "all") {
+      setSelectedStatuses([]);
+      return;
+    }
+    setSelectedStatuses((prev) => {
+      if (prev.includes(status)) {
+        return prev.filter((s) => s !== status);
+      } else {
+        return [...prev, status];
+      }
+    });
+  };
+
+  const togglePayment = (payment: string) => {
+    setActivePreset(null);
+    if (payment === "all") {
+      setSelectedPayments([]);
+      return;
+    }
+    setSelectedPayments((prev) => {
+      if (prev.includes(payment)) {
+        return prev.filter((p) => p !== payment);
+      } else {
+        return [...prev, payment];
+      }
+    });
+  };
+
+  const applyPreset = (presetKey: "toDeliver" | "lateSLA" | "deliveredUnpaid" | "emergency") => {
+    if (activePreset === presetKey) {
+      setActivePreset(null);
+      setSelectedStatuses([]);
+      setSelectedPayments([]);
+      return;
+    }
+    setActivePreset(presetKey);
+    if (presetKey === "toDeliver") {
+      setSelectedStatuses(["Packed", "Dispatched"]);
+      setSelectedPayments([]);
+    } else if (presetKey === "deliveredUnpaid") {
+      setSelectedStatuses(["Delivered"]);
+      setSelectedPayments(["Unpaid", "Partial"]);
+    } else if (presetKey === "lateSLA" || presetKey === "emergency") {
+      setSelectedStatuses([]);
+      setSelectedPayments([]);
+    }
+  };
+
+  const resetAllFilters = () => {
+    setSelectedStatuses([]);
+    setSelectedPayments([]);
+    setDateFilter("all");
+    setDateBasis("placed");
+    setAmountFilter("all");
+    setChannel("all");
+    setSearchQuery("");
+    setSearchTarget("all");
+    setActivePreset(null);
+    setCustomStart("");
+    setCustomEnd("");
+    setCustomMinAmount("");
+    setCustomMaxAmount("");
+    try {
+      sessionStorage.removeItem("pc_sales_orders_filters");
+      localStorage.removeItem("pc_sales_orders_filters");
+    } catch { /* ignore */ }
+  };
+
+  const hasActiveFilters = Boolean(
+    selectedStatuses.length > 0 ||
+    selectedPayments.length > 0 ||
+    dateFilter !== "all" ||
+    amountFilter !== "all" ||
+    channel !== "all" ||
+    searchQuery.trim() !== "" ||
+    activePreset !== null
+  );
+
+  const getOrderDate = (o: SalesOrder, basis: "placed" | "delivered" | "expected"): number | null => {
+    if (basis === "placed") return o.createdAt;
+    if (basis === "delivered") {
+      if (o.deliveredAt) return o.deliveredAt;
+      if (o.status === "Delivered") return o.updatedAt || o.createdAt;
+      return null;
+    }
+    if (basis === "expected") {
+      return o.expectedDelivery || o.targetSLA || null;
+    }
+    return o.createdAt;
+  };
 
   const dateFilteredOrders = useMemo(() => {
     return orders.filter((o) => {
       if (dateFilter === "all") return true;
-      const ts = o.createdAt;
+      const ts = getOrderDate(o, dateBasis);
+      if (ts === null || ts === 0) return false;
+
       if (dateFilter === "today") {
         const startOfToday = new Date();
         startOfToday.setHours(0, 0, 0, 0);
@@ -967,7 +1134,7 @@ export default function SalesOrders() {
       }
       return true;
     });
-  }, [orders, dateFilter, customStart, customEnd]);
+  }, [orders, dateFilter, dateBasis, customStart, customEnd]);
 
   const amountFilteredOrders = useMemo(() => {
     return dateFilteredOrders.filter((o) => {
@@ -993,34 +1160,92 @@ export default function SalesOrders() {
     return c;
   }, [amountFilteredOrders]);
 
-  const rows = amountFilteredOrders
-    .filter((o) => {
-      if (statusTab !== "all" && o.status !== statusTab) return false;
-      if (channel !== "all" && o.channel !== channel) return false;
-      if (paymentFilter !== "all") {
-        const { statusText } = getOrderPaymentInfo(o);
-        const normalizedPayment = statusText === "Partial Paid" ? "Partial" : statusText;
-        if (normalizedPayment !== paymentFilter) return false;
-      }
-      return true;
-    })
-    .filter((o) => {
-      const q = searchQuery.trim().toLowerCase();
-      if (!q) return true;
-      return (
-        (o.orderNo || "").toLowerCase().includes(q) ||
-        (o.id || "").toLowerCase().includes(q) ||
-        (o.salonName || "").toLowerCase().includes(q) ||
-        (o.resolvedSalonName || "").toLowerCase().includes(q) ||
-        (o.customerName || "").toLowerCase().includes(q) ||
-        (o.ownerName || "").toLowerCase().includes(q) ||
-        (o.salesExecutive || "").toLowerCase().includes(q) ||
-        (o.createdBy || "").toLowerCase().includes(q) ||
-        (o.paymentMethod || "").toLowerCase().includes(q) ||
-        (o.paymentMode || "").toLowerCase().includes(q)
-      );
-    })
-    .sort((a, b) => b.createdAt - a.createdAt);
+  const rows = useMemo(() => {
+    return amountFilteredOrders
+      .filter((o) => {
+        // Preset special filters
+        if (activePreset === "lateSLA") {
+          const now = Date.now();
+          const targetDate = o.expectedDelivery || o.targetSLA;
+          const isLate = Boolean(targetDate && targetDate < now && o.status !== "Delivered" && o.status !== "Cancelled");
+          if (!isLate) return false;
+        }
+        if (activePreset === "emergency") {
+          const isEm = Boolean(o.isEmergency || o.deliveryType === "emergency");
+          if (!isEm) return false;
+        }
+
+        // Status filter (OR logic within statuses)
+        if (selectedStatuses.length > 0 && !selectedStatuses.includes(o.status)) {
+          return false;
+        }
+
+        // Channel filter
+        if (channel !== "all" && o.channel !== channel) {
+          return false;
+        }
+
+        // Payment filter (OR logic within payments)
+        if (selectedPayments.length > 0) {
+          const { statusText } = getOrderPaymentInfo(o);
+          const normalizedPayment = statusText === "Partial Paid" ? "Partial" : statusText;
+          if (!selectedPayments.includes(normalizedPayment)) return false;
+        }
+
+        return true;
+      })
+      .filter((o) => {
+        const q = searchQuery.trim().toLowerCase();
+        if (!q) return true;
+
+        if (searchTarget === "salon") {
+          return (
+            (o.salonName || "").toLowerCase().includes(q) ||
+            (o.resolvedSalonName || "").toLowerCase().includes(q) ||
+            (o.customerName || "").toLowerCase().includes(q) ||
+            (o.ownerName || "").toLowerCase().includes(q)
+          );
+        }
+
+        if (searchTarget === "orderNo") {
+          return (o.orderNo || "").toLowerCase().includes(q) || (o.id || "").toLowerCase().includes(q);
+        }
+
+        if (searchTarget === "product") {
+          return Array.isArray(o.lines) && o.lines.some((l: any) =>
+            (l.name || "").toLowerCase().includes(q) ||
+            (l.sku || "").toLowerCase().includes(q)
+          );
+        }
+
+        // searchTarget === "all"
+        return (
+          (o.orderNo || "").toLowerCase().includes(q) ||
+          (o.id || "").toLowerCase().includes(q) ||
+          (o.salonName || "").toLowerCase().includes(q) ||
+          (o.resolvedSalonName || "").toLowerCase().includes(q) ||
+          (o.customerName || "").toLowerCase().includes(q) ||
+          (o.ownerName || "").toLowerCase().includes(q) ||
+          (o.salesExecutive || "").toLowerCase().includes(q) ||
+          (o.createdBy || "").toLowerCase().includes(q) ||
+          (o.paymentMethod || "").toLowerCase().includes(q) ||
+          (o.paymentMode || "").toLowerCase().includes(q) ||
+          (Array.isArray(o.lines) && o.lines.some((l: any) =>
+            (l.name || "").toLowerCase().includes(q) ||
+            (l.sku || "").toLowerCase().includes(q)
+          ))
+        );
+      })
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }, [
+    amountFilteredOrders,
+    selectedStatuses,
+    channel,
+    selectedPayments,
+    searchQuery,
+    searchTarget,
+    activePreset,
+  ]);
 
   const { statTotalOrders, statRevenue, statProfit } = useMemo(() => {
     const totalOrders = rows.length;
@@ -1079,10 +1304,26 @@ export default function SalesOrders() {
       <div className="mt-4 space-y-4 animate-in fade-in duration-300">
         {/* Date & Amount Filter Bar */}
         <div className="space-y-3 rounded-lg bg-slate-50 p-3.5 dark:bg-slate-800/50 border border-slate-200/40 dark:border-slate-700/30">
-          {/* Date Filter Row */}
+          {/* Date Filter Row with Date Basis Selector */}
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-2">Filter Date:</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-1 flex items-center gap-1">
+                <Calendar className="h-3.5 w-3.5 text-blue-500" /> Filter Date:
+              </span>
+
+              {/* Date Basis Selector */}
+              <div className="relative inline-flex items-center">
+                <select
+                  value={dateBasis}
+                  onChange={(e) => setDateBasis(e.target.value as any)}
+                  className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 focus:outline-none shadow-sm cursor-pointer hover:border-slate-300"
+                >
+                  <option value="placed">📅 Order Placed Date</option>
+                  <option value="delivered">🚚 Actual Delivery Date</option>
+                  <option value="expected">⏱️ Expected / SLA Date</option>
+                </select>
+              </div>
+
               <div className="flex rounded-lg bg-slate-200/60 p-0.5 dark:bg-slate-900/60">
                 {(["all", "today", "week", "month", "custom"] as const).map((mode) => (
                   <button
@@ -1114,6 +1355,12 @@ export default function SalesOrders() {
                     className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:outline-none"
                   />
                 </div>
+              )}
+
+              {dateBasis !== "placed" && dateFilter !== "all" && (
+                <span className="text-[11px] font-medium text-blue-600 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded border border-blue-200/60">
+                  {dateBasis === "delivered" ? "Filtering by deliveredAt timestamp" : "Filtering by expected delivery SLA"}
+                </span>
               )}
             </div>
 
@@ -1232,25 +1479,102 @@ export default function SalesOrders() {
         </div>
       </div>
 
-      <div className="mb-4 mt-6 flex flex-wrap items-center gap-2">
-        {["all", ...STATUSES].map((s) => {
-          const isActive = statusTab === s;
-          const count = s === "all" ? counts.all : counts[s];
+      {/* Quick Presets Row (Odoo / Zoho Shortcuts) */}
+      <div className="mb-3 mt-6 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-1 flex items-center gap-1">
+          <Zap className="h-3.5 w-3.5 text-amber-500" /> Presets:
+        </span>
+        <button
+          onClick={() => applyPreset("toDeliver")}
+          className={`rounded-full px-3 py-1 text-xs font-medium transition inline-flex items-center gap-1.5 border shadow-sm ${
+            activePreset === "toDeliver"
+              ? "bg-blue-600 text-white border-blue-600 ring-2 ring-blue-300"
+              : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700"
+          }`}
+          title="Orders Packed or Dispatched ready for delivery"
+        >
+          <Truck className="h-3.5 w-3.5" />
+          To Deliver (Packed/Dispatched)
+        </button>
+        <button
+          onClick={() => applyPreset("lateSLA")}
+          className={`rounded-full px-3 py-1 text-xs font-medium transition inline-flex items-center gap-1.5 border shadow-sm ${
+            activePreset === "lateSLA"
+              ? "bg-rose-600 text-white border-rose-600 ring-2 ring-rose-300"
+              : "bg-white text-rose-600 border-rose-200 hover:bg-rose-50 dark:bg-slate-900 dark:text-rose-400 dark:border-rose-900"
+          }`}
+          title="Orders where expected delivery timestamp has passed"
+        >
+          <Clock className="h-3.5 w-3.5" />
+          Late / Overdue SLA
+        </button>
+        <button
+          onClick={() => applyPreset("deliveredUnpaid")}
+          className={`rounded-full px-3 py-1 text-xs font-medium transition inline-flex items-center gap-1.5 border shadow-sm ${
+            activePreset === "deliveredUnpaid"
+              ? "bg-amber-600 text-white border-amber-600 ring-2 ring-amber-300"
+              : "bg-white text-amber-700 border-amber-200 hover:bg-amber-50 dark:bg-slate-900 dark:text-amber-400 dark:border-amber-900"
+          }`}
+          title="Orders delivered but payment is still pending or partial"
+        >
+          💰 Delivered & Unpaid
+        </button>
+        <button
+          onClick={() => applyPreset("emergency")}
+          className={`rounded-full px-3 py-1 text-xs font-medium transition inline-flex items-center gap-1.5 border shadow-sm ${
+            activePreset === "emergency"
+              ? "bg-purple-600 text-white border-purple-600 ring-2 ring-purple-300"
+              : "bg-white text-purple-700 border-purple-200 hover:bg-purple-50 dark:bg-slate-900 dark:text-purple-400 dark:border-purple-900"
+          }`}
+          title="Express 2-hour emergency orders"
+        >
+          ⚡ Emergency 2h SLA
+        </button>
+      </div>
+
+      {/* Status & Payment Multi-Select Pills (OR condition within dimension) */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => toggleStatus("all")}
+          className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
+            selectedStatuses.length === 0
+              ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
+              : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+          }`}
+        >
+          <span>All</span>
+          <span
+            className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+              selectedStatuses.length === 0
+                ? "bg-white/20 text-white"
+                : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+            }`}
+          >
+            {counts.all}
+          </span>
+        </button>
+
+        {STATUSES.map((s) => {
+          const isActive = selectedStatuses.includes(s);
+          const count = counts[s] || 0;
           return (
             <button
               key={s}
-              onClick={() => setStatusTab(s)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${isActive
-                ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
-                : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-                }`}
+              onClick={() => toggleStatus(s)}
+              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
+                isActive
+                  ? "bg-indigo-600 text-white ring-indigo-600 shadow-sm"
+                  : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+              }`}
+              title={`Click to toggle ${s} filter (OR condition)`}
             >
-              <span>{s === "all" ? "All" : s}</span>
+              <span>{s}</span>
               <span
-                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive
-                  ? "bg-white/20 text-white"
-                  : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-                  }`}
+                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                  isActive
+                    ? "bg-white/20 text-white"
+                    : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                }`}
               >
                 {count}
               </span>
@@ -1260,18 +1584,31 @@ export default function SalesOrders() {
 
         <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 mx-2"></div>
 
-        {(["all", "Paid", "Unpaid", "Partial"] as const).map((pStatus) => {
-          const isActive = paymentFilter === pStatus;
+        <button
+          onClick={() => togglePayment("all")}
+          className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
+            selectedPayments.length === 0
+              ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
+              : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+          }`}
+        >
+          <span>All Payments</span>
+        </button>
+
+        {(["Paid", "Unpaid", "Partial"] as const).map((pStatus) => {
+          const isActive = selectedPayments.includes(pStatus);
           return (
             <button
               key={pStatus}
-              onClick={() => setPaymentFilter(pStatus)}
-              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${isActive
-                ? "bg-slate-900 text-white ring-slate-900 dark:bg-white dark:text-slate-900"
-                : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
-                }`}
+              onClick={() => togglePayment(pStatus)}
+              className={`rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition inline-flex items-center gap-1.5 ${
+                isActive
+                  ? "bg-emerald-600 text-white ring-emerald-600 shadow-sm"
+                  : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700"
+              }`}
+              title={`Click to toggle ${pStatus} payment filter (OR condition)`}
             >
-              <span>{pStatus === "all" ? "All Payments" : pStatus}</span>
+              <span>{pStatus}</span>
             </button>
           );
         })}
@@ -1285,16 +1622,344 @@ export default function SalesOrders() {
         </Select>
       </div>
 
-      {/* Sticky Search Bar Container */}
-      <div className="sticky top-[56px] z-10 bg-white/95 py-3 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200/50 dark:border-slate-800/50 mb-4 mt-6 -mx-4 px-4">
-        <div className="relative w-full max-w-md">
+      {/* Active Filter Chips Bar (Odoo Facets) */}
+      {hasActiveFilters && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-blue-50/70 p-2.5 border border-blue-100 dark:bg-slate-800/70 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-300 animate-in fade-in">
+          <span className="font-semibold text-blue-900 dark:text-blue-300 text-[11px] uppercase tracking-wider flex items-center gap-1">
+            <Filter className="h-3 w-3" /> Filters:
+          </span>
+
+          {selectedStatuses.length > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
+              <span className="text-slate-400 font-semibold">Status:</span>
+              <span className="font-medium text-indigo-600 dark:text-indigo-400">
+                {selectedStatuses.join(" OR ")}
+              </span>
+              <button onClick={() => setSelectedStatuses([])} className="ml-1 text-slate-400 hover:text-slate-600">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
+
+          {selectedStatuses.length > 0 && (selectedPayments.length > 0 || dateFilter !== "all" || searchQuery.trim() !== "") && (
+            <span className="text-[10px] font-bold text-slate-400 uppercase">AND</span>
+          )}
+
+          {selectedPayments.length > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
+              <span className="text-slate-400 font-semibold">Payment:</span>
+              <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                {selectedPayments.join(" OR ")}
+              </span>
+              <button onClick={() => setSelectedPayments([])} className="ml-1 text-slate-400 hover:text-slate-600">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
+
+          {selectedPayments.length > 0 && (dateFilter !== "all" || searchQuery.trim() !== "") && (
+            <span className="text-[10px] font-bold text-slate-400 uppercase">AND</span>
+          )}
+
+          {dateFilter !== "all" && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
+              <span className="text-slate-400 font-semibold">
+                {dateBasis === "placed" ? "Placed Date" : dateBasis === "delivered" ? "Delivery Date" : "Expected Date"}:
+              </span>
+              <span className="font-medium text-blue-600 dark:text-blue-400">
+                {dateFilter === "today" ? "Today" : dateFilter === "week" ? "Last Week" : dateFilter === "month" ? "Last Month" : `${customStart} to ${customEnd}`}
+              </span>
+              <button onClick={() => setDateFilter("all")} className="ml-1 text-slate-400 hover:text-slate-600">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
+
+          {dateFilter !== "all" && searchQuery.trim() !== "" && (
+            <span className="text-[10px] font-bold text-slate-400 uppercase">AND</span>
+          )}
+
+          {searchQuery.trim() !== "" && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
+              <span className="text-slate-400 font-semibold">
+                {searchTarget === "salon" ? "Salon:" : searchTarget === "orderNo" ? "Order #:" : searchTarget === "product" ? "Product:" : "Search:"}
+              </span>
+              <span className="font-medium text-slate-800 dark:text-slate-200">
+                "{searchQuery}"
+              </span>
+              <button onClick={() => { setSearchQuery(""); setSearchTarget("all"); }} className="ml-1 text-slate-400 hover:text-slate-600">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
+
+          {activePreset && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-700">
+              <span className="text-slate-400 font-semibold">Preset:</span>
+              <span className="font-medium text-amber-600">
+                {activePreset === "toDeliver" ? "To Deliver" : activePreset === "lateSLA" ? "Late SLA" : activePreset === "deliveredUnpaid" ? "Delivered & Unpaid" : "Emergency SLA"}
+              </span>
+              <button onClick={() => setActivePreset(null)} className="ml-1 text-slate-400 hover:text-slate-600">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
+
+          <button
+            onClick={resetAllFilters}
+            className="ml-auto text-xs text-rose-600 hover:text-rose-700 font-semibold hover:underline"
+          >
+            Clear All Filters
+          </button>
+        </div>
+      )}
+
+      {/* Sticky Omnibox Search Bar Container */}
+      <div className="sticky top-[56px] z-10 bg-white/95 py-3 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200/50 dark:border-slate-800/50 mb-4 mt-2 -mx-4 px-4" ref={searchContainerRef}>
+        <div className="relative w-full max-w-xl">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <Input
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by Order ID, Salon Name, or Owner Name..."
-            className="pl-9"
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setShowSearchDropdown(true);
+            }}
+            onFocus={() => {
+              if (searchQuery.trim()) setShowSearchDropdown(true);
+            }}
+            placeholder="Search by Order ID, Salon Name, Products, or Status..."
+            className="pl-9 pr-24"
           />
+          {searchQuery && (
+            <button
+              onClick={() => {
+                setSearchQuery("");
+                setSearchTarget("all");
+                setShowSearchDropdown(false);
+              }}
+              className="absolute right-16 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+
+          {/* Search Target Tag Badge */}
+          {searchTarget !== "all" && (
+            <span className="absolute right-2 top-1/2 -translate-y-1/2 bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 text-[10px] font-semibold px-2 py-0.5 rounded">
+              in {searchTarget}
+            </span>
+          )}
+
+          {/* Odoo Style Omnibox Dropdown */}
+          {showSearchDropdown && searchQuery.trim() && (
+            <div className="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-1.5 z-30 overflow-hidden text-xs">
+              <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                Filter Field Target:
+              </div>
+
+              <button
+                onClick={() => {
+                  setSearchTarget("all");
+                  setShowSearchDropdown(false);
+                }}
+                className={`w-full px-3 py-2 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 ${
+                  searchTarget === "all" ? "bg-slate-50 font-semibold text-blue-600 dark:bg-slate-700/50" : "text-slate-700 dark:text-slate-200"
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Search className="h-3.5 w-3.5 text-slate-400" />
+                  Search <strong>All Fields</strong> for <span className="text-blue-600 italic">"{searchQuery}"</span>
+                </span>
+                <span className="text-[10px] text-slate-400">General</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSearchTarget("salon");
+                  setShowSearchDropdown(false);
+                }}
+                className={`w-full px-3 py-2 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 ${
+                  searchTarget === "salon" ? "bg-slate-50 font-semibold text-blue-600 dark:bg-slate-700/50" : "text-slate-700 dark:text-slate-200"
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Search className="h-3.5 w-3.5 text-indigo-500" />
+                  Search <strong>Salon / Customer</strong> for <span className="text-blue-600 italic">"{searchQuery}"</span>
+                </span>
+                <span className="text-[10px] text-slate-400">Customer</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSearchTarget("orderNo");
+                  setShowSearchDropdown(false);
+                }}
+                className={`w-full px-3 py-2 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 ${
+                  searchTarget === "orderNo" ? "bg-slate-50 font-semibold text-blue-600 dark:bg-slate-700/50" : "text-slate-700 dark:text-slate-200"
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Search className="h-3.5 w-3.5 text-emerald-500" />
+                  Search <strong>Order Number #</strong> for <span className="text-blue-600 italic">"{searchQuery}"</span>
+                </span>
+                <span className="text-[10px] text-slate-400">Order ID</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSearchTarget("product");
+                  setShowSearchDropdown(false);
+                }}
+                className={`w-full px-3 py-2 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 ${
+                  searchTarget === "product" ? "bg-slate-50 font-semibold text-blue-600 dark:bg-slate-700/50" : "text-slate-700 dark:text-slate-200"
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <PackagePlus className="h-3.5 w-3.5 text-amber-500" />
+                  Search <strong>Products in Order</strong> for <span className="text-blue-600 italic">"{searchQuery}"</span>
+                </span>
+                <span className="text-[10px] text-slate-400">Line Items</span>
+              </button>
+
+              {/* Smart Omnibox Actions for Delivery, Dates, and Statuses */}
+              {(() => {
+                const qLower = searchQuery.trim().toLowerCase();
+                const matchedStatus = STATUSES.find((s) => s.toLowerCase().includes(qLower));
+                const isDeliveryQuery = qLower.includes("deliv") || qLower.includes("date") || qLower.includes("sla") || qLower.includes("eta");
+                const isPaymentQuery = qLower.includes("pay") || qLower.includes("paid") || qLower.includes("unpaid");
+
+                if (!matchedStatus && !isDeliveryQuery && !isPaymentQuery) return null;
+
+                return (
+                  <div className="border-t border-slate-100 dark:border-slate-700 mt-1 pt-1 space-y-0.5">
+                    <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                      Smart Filter Shortcuts:
+                    </div>
+
+                    {isDeliveryQuery && (
+                      <>
+                        <button
+                          onClick={() => {
+                            setDateBasis("delivered");
+                            if (dateFilter === "all") setDateFilter("month");
+                            setSearchQuery("");
+                            setShowSearchDropdown(false);
+                          }}
+                          className="w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 text-emerald-600 dark:text-emerald-400 font-medium"
+                        >
+                          <span className="flex items-center gap-2">
+                            <Truck className="h-3.5 w-3.5" />
+                            Filter by: <strong>Actual Delivery Date</strong>
+                          </span>
+                          <span className="text-[10px] bg-emerald-50 text-emerald-700 dark:bg-emerald-950 px-1.5 py-0.5 rounded">
+                            Date Basis
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setDateBasis("expected");
+                            if (dateFilter === "all") setDateFilter("month");
+                            setSearchQuery("");
+                            setShowSearchDropdown(false);
+                          }}
+                          className="w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 text-blue-600 dark:text-blue-400 font-medium"
+                        >
+                          <span className="flex items-center gap-2">
+                            <Calendar className="h-3.5 w-3.5" />
+                            Filter by: <strong>Expected Delivery Date (ETA)</strong>
+                          </span>
+                          <span className="text-[10px] bg-blue-50 text-blue-700 dark:bg-blue-950 px-1.5 py-0.5 rounded">
+                            Date Basis
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            applyPreset("toDeliver");
+                            setSearchQuery("");
+                            setShowSearchDropdown(false);
+                          }}
+                          className="w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 text-indigo-600 dark:text-indigo-400 font-medium"
+                        >
+                          <span className="flex items-center gap-2">
+                            <Truck className="h-3.5 w-3.5" />
+                            Preset: <strong>To Deliver (Packed/Dispatched)</strong>
+                          </span>
+                          <span className="text-[10px] bg-indigo-50 text-indigo-700 dark:bg-indigo-950 px-1.5 py-0.5 rounded">
+                            Preset
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            applyPreset("deliveredUnpaid");
+                            setSearchQuery("");
+                            setShowSearchDropdown(false);
+                          }}
+                          className="w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 text-amber-600 dark:text-amber-400 font-medium"
+                        >
+                          <span className="flex items-center gap-2">
+                            <Zap className="h-3.5 w-3.5" />
+                            Preset: <strong>Delivered & Unpaid</strong>
+                          </span>
+                          <span className="text-[10px] bg-amber-50 text-amber-700 dark:bg-amber-950 px-1.5 py-0.5 rounded">
+                            Preset
+                          </span>
+                        </button>
+                      </>
+                    )}
+
+                    {matchedStatus && (
+                      <button
+                        onClick={() => {
+                          toggleStatus(matchedStatus);
+                          setSearchQuery("");
+                          setShowSearchDropdown(false);
+                        }}
+                        className="w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 text-indigo-600 dark:text-indigo-400 font-medium"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Truck className="h-3.5 w-3.5" />
+                          Apply Status Filter: <strong>{matchedStatus}</strong>
+                        </span>
+                        <span className="text-[10px] bg-indigo-50 text-indigo-700 dark:bg-indigo-950 px-1.5 py-0.5 rounded">
+                          Add Status Chip
+                        </span>
+                      </button>
+                    )}
+
+                    {isPaymentQuery && (
+                      <>
+                        {["Unpaid", "Paid", "Partial"].map((p) => {
+                          if (!p.toLowerCase().includes(qLower) && !qLower.includes("pay")) return null;
+                          return (
+                            <button
+                              key={p}
+                              onClick={() => {
+                                togglePayment(p);
+                                setSearchQuery("");
+                                setShowSearchDropdown(false);
+                              }}
+                              className="w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 text-emerald-600 dark:text-emerald-400 font-medium"
+                            >
+                              <span className="flex items-center gap-2">
+                                <Zap className="h-3.5 w-3.5" />
+                                Apply Payment Filter: <strong>{p}</strong>
+                              </span>
+                              <span className="text-[10px] bg-emerald-50 text-emerald-700 dark:bg-emerald-950 px-1.5 py-0.5 rounded">
+                                Add Payment Chip
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1305,7 +1970,7 @@ export default function SalesOrders() {
             <div key={o.id}>
               <Card className="p-4">
                 <div className="flex flex-wrap items-center gap-3">
-                  <div className="w-24">
+                  <div className="w-28 sm:w-32 shrink-0">
                     <div className="font-semibold text-slate-900 dark:text-white flex flex-col gap-0.5">
                       <span>{o.orderNo}</span>
                       {o.isAdminDeleted && (
@@ -1316,6 +1981,24 @@ export default function SalesOrders() {
                     </div>
                     <div className="text-xs text-slate-400 space-y-0.5 mt-1">
                       <div>Pl: {fmtDateTime(o.createdAt)}</div>
+                      {o.deliveredAt ? (
+                        <div className="text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1" title="Delivered Date">
+                          <Truck className="h-3 w-3 shrink-0" />
+                          <span>Del: {fmtDate(o.deliveredAt)}</span>
+                        </div>
+                      ) : o.expectedDelivery ? (
+                        <div
+                          className={`font-medium flex items-center gap-1 ${
+                            Date.now() > o.expectedDelivery && o.status !== "Delivered" && o.status !== "Cancelled" && o.status !== "Returned"
+                              ? "text-rose-600 dark:text-rose-400 font-semibold"
+                              : "text-blue-600 dark:text-blue-400"
+                          }`}
+                          title="Expected Delivery Date"
+                        >
+                          <Calendar className="h-3 w-3 shrink-0" />
+                          <span>Exp: {fmtDate(o.expectedDelivery)}</span>
+                        </div>
+                      ) : null}
                       {o.updatedAt && Math.abs(o.updatedAt - o.createdAt) > 60000 && (
                         <div className="text-indigo-600 dark:text-indigo-400 font-medium" title="Last Updated">
                           Up: {fmtDateTime(o.updatedAt)}
@@ -1349,6 +2032,81 @@ export default function SalesOrders() {
                       >
                         <Badge color={statusColor}>{statusText}</Badge>
                       </button>
+
+                      {/* Direct Delivery Date Pill in Order Row */}
+                      <span>·</span>
+                      {(() => {
+                        const now = Date.now();
+                        const isLate = !!(
+                          o.expectedDelivery &&
+                          now > o.expectedDelivery &&
+                          o.status !== "Delivered" &&
+                          o.status !== "Cancelled" &&
+                          o.status !== "Returned"
+                        );
+
+                        if (o.deliveredAt) {
+                          return (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeliveryModalOrder(o);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800 cursor-pointer transition shadow-xs"
+                              title="Actual Delivered Date. Click to change or reschedule."
+                            >
+                              <Truck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                              <span>Delivered: {fmtDate(o.deliveredAt)}</span>
+                              <Pencil className="h-2.5 w-2.5 opacity-60 ml-0.5" />
+                            </button>
+                          );
+                        }
+
+                        if (o.expectedDelivery) {
+                          return (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeliveryModalOrder(o);
+                              }}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border cursor-pointer transition shadow-xs ${
+                                isLate
+                                  ? "bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800"
+                                  : "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800"
+                              }`}
+                              title={
+                                isLate
+                                  ? "Delivery SLA Overdue! Click to reschedule."
+                                  : "Expected Delivery Date (ETA). Click to edit."
+                              }
+                            >
+                              <Calendar className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                              <span>Exp: {fmtDate(o.expectedDelivery)}</span>
+                              {isLate && (
+                                <span className="text-[9px] bg-rose-200 text-rose-800 dark:bg-rose-900 dark:text-rose-200 px-1 rounded font-bold">
+                                  LATE
+                                </span>
+                              )}
+                              <Pencil className="h-2.5 w-2.5 opacity-60 ml-0.5" />
+                            </button>
+                          );
+                        }
+
+                        return (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeliveryModalOrder(o);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium text-slate-500 bg-slate-50 border border-dashed border-slate-300 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/50 dark:bg-slate-800/60 dark:border-slate-700 dark:text-slate-400 dark:hover:border-blue-500 dark:hover:text-blue-300 cursor-pointer transition"
+                            title="No delivery date set. Click to add delivery date."
+                          >
+                            <Calendar className="h-3 w-3 text-slate-400" />
+                            <span>+ Delivery Date</span>
+                          </button>
+                        );
+                      })()}
+
                       {(o.paymentMethod || o.paymentMode) && (
                         <>
                           <span>·</span>
@@ -1377,6 +2135,14 @@ export default function SalesOrders() {
                     {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                   </Select>
                   <Button variant="secondary" onClick={(e) => { e.stopPropagation(); navigate(`/orders/${o.id}`); }}><Eye className="h-4 w-4" /> Details</Button>
+                  <Button
+                    variant="secondary"
+                    onClick={(e) => { e.stopPropagation(); setDeliveryModalOrder(o); }}
+                    title={o.expectedDelivery || o.deliveredAt ? "Edit Delivery Date" : "Add Delivery Date"}
+                    className={o.expectedDelivery || o.deliveredAt ? "text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800" : ""}
+                  >
+                    <Calendar className="h-4 w-4" /> Delivery
+                  </Button>
                   <Button variant="secondary" onClick={(e) => { e.stopPropagation(); setNotify(o); }}><Bell className="h-4 w-4" /> Notify</Button>
                   <Button variant="secondary" onClick={(e) => { e.stopPropagation(); setInvoice(o); }}><FileText className="h-4 w-4" /> Invoice</Button>
                   <button
@@ -1396,6 +2162,7 @@ export default function SalesOrders() {
 
       <InvoiceModal order={invoice} onClose={() => setInvoice(null)} />
       <NotifyModal order={notify} onClose={() => setNotify(null)} />
+      <DeliveryDateModal order={deliveryModalOrder} onClose={() => setDeliveryModalOrder(null)} />
     </div>
   );
 }
@@ -1485,6 +2252,219 @@ function NotifyModal({ order, onClose }: { order: SalesOrder | null; onClose: ()
         <Field label="Draft message (editable, customer-facing only — no internal data)">
           <Textarea rows={12} value={text} onChange={(e) => setText(e.target.value)} className="font-mono text-xs" />
         </Field>
+      </div>
+    </Modal>
+  );
+}
+
+function DeliveryDateModal({ order, onClose }: { order: SalesOrder | null; onClose: () => void }) {
+  const [dateType, setDateType] = useState<"expected" | "delivered">("expected");
+  const [dateValue, setDateValue] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!order) return;
+    if (order.deliveredAt) {
+      setDateType("delivered");
+      setDateValue(new Date(order.deliveredAt).toISOString().slice(0, 10));
+    } else if (order.expectedDelivery) {
+      setDateType("expected");
+      setDateValue(new Date(order.expectedDelivery).toISOString().slice(0, 10));
+    } else {
+      setDateType(order.status === "Delivered" ? "delivered" : "expected");
+      setDateValue(new Date().toISOString().slice(0, 10));
+    }
+  }, [order]);
+
+  if (!order) return null;
+
+  const handleQuickPreset = (offsetDays: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    setDateValue(d.toISOString().slice(0, 10));
+  };
+
+  const handleSave = async () => {
+    if (!dateValue) {
+      toast.error("Please select a date");
+      return;
+    }
+    setSaving(true);
+    try {
+      // Use noon to avoid timezone shift issues
+      const ts = new Date(`${dateValue}T12:00:00`).getTime();
+      const updates: { expectedDelivery?: number | null; deliveredAt?: number | null } = {};
+      if (dateType === "expected") {
+        updates.expectedDelivery = ts;
+      } else {
+        updates.deliveredAt = ts;
+      }
+      await saveOrderDeliveryDate(order.id, updates, order.orderNo);
+      toast.success(
+        `${dateType === "expected" ? "Expected delivery" : "Delivered"} date saved for ${order.orderNo}`
+      );
+      onClose();
+    } catch (err: any) {
+      console.error("Failed to save delivery date:", err);
+      toast.error(`Error saving date: ${err.message || err}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClear = async () => {
+    if (!window.confirm(`Clear delivery date for order ${order.orderNo}?`)) return;
+    setSaving(true);
+    try {
+      await saveOrderDeliveryDate(
+        order.id,
+        { expectedDelivery: null, deliveredAt: null },
+        order.orderNo
+      );
+      toast.success(`Delivery date removed for ${order.orderNo}`);
+      onClose();
+    } catch (err: any) {
+      toast.error(`Error removing date: ${err.message || err}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={!!order}
+      onClose={onClose}
+      title={`Set Delivery Date — ${order.orderNo}`}
+      footer={
+        <div className="flex w-full items-center justify-between gap-2">
+          <div>
+            {(order.expectedDelivery || order.deliveredAt) ? (
+              <Button variant="danger" onClick={handleClear} disabled={saving}>
+                <Trash2 className="h-4 w-4 mr-1.5" /> Clear Date
+              </Button>
+            ) : <span />}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={onClose} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={saving || !dateValue}>
+              <Save className="h-4 w-4 mr-1.5" /> Save Date
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div className="space-y-4 py-2">
+        <div className="rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-200 dark:border-slate-700 flex justify-between items-center text-xs">
+          <div>
+            <span className="text-slate-400 font-medium">Customer:</span>{" "}
+            <span className="font-semibold text-slate-800 dark:text-slate-200">
+              {(order as any).resolvedSalonName || order.salonName || (order as any).customerName || "-"}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-400 font-medium">Current Status:</span>{" "}
+            <StatusBadge value={order.status} />
+          </div>
+        </div>
+
+        {/* Date Type Selector */}
+        <div>
+          <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1.5">
+            Select Date Category:
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setDateType("expected")}
+              className={`p-2.5 rounded-lg border text-left transition flex items-center gap-2 text-xs font-medium ${
+                dateType === "expected"
+                  ? "border-blue-600 bg-blue-50/70 text-blue-800 dark:bg-blue-950/50 dark:border-blue-500 dark:text-blue-300 ring-1 ring-blue-500"
+                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+              }`}
+            >
+              <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0" />
+              <div>
+                <div className="font-semibold">Expected Delivery (ETA)</div>
+                <div className="text-[10px] text-slate-400">Scheduled arrival date</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDateType("delivered")}
+              className={`p-2.5 rounded-lg border text-left transition flex items-center gap-2 text-xs font-medium ${
+                dateType === "delivered"
+                  ? "border-emerald-600 bg-emerald-50/70 text-emerald-800 dark:bg-emerald-950/50 dark:border-emerald-500 dark:text-emerald-300 ring-1 ring-emerald-500"
+                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+              }`}
+            >
+              <Truck className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <div>
+                <div className="font-semibold">Actual Delivered Date</div>
+                <div className="text-[10px] text-slate-400">When package was received</div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* Date Picker Input */}
+        <div>
+          <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1.5">
+            {dateType === "expected" ? "Expected Delivery Date:" : "Delivered On:"}
+          </label>
+          <Input
+            type="date"
+            value={dateValue}
+            onChange={(e) => setDateValue(e.target.value)}
+            className="w-full text-sm py-2"
+          />
+        </div>
+
+        {/* Quick Presets */}
+        <div>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 block mb-1.5">
+            Quick Shortcuts:
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => handleQuickPreset(0)}
+              className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              onClick={() => handleQuickPreset(1)}
+              className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+            >
+              Tomorrow
+            </button>
+            <button
+              type="button"
+              onClick={() => handleQuickPreset(2)}
+              className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+            >
+              +2 Days
+            </button>
+            <button
+              type="button"
+              onClick={() => handleQuickPreset(3)}
+              className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+            >
+              +3 Days
+            </button>
+            <button
+              type="button"
+              onClick={() => handleQuickPreset(7)}
+              className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+            >
+              +1 Week
+            </button>
+          </div>
+        </div>
       </div>
     </Modal>
   );

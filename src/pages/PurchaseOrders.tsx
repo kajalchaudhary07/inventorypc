@@ -358,10 +358,29 @@ export default function PurchaseOrders() {
   const vendors = useMemo(() => rawVendors.filter((v: any) => v.isDeleted !== true), [rawVendors]);
   const [createOpen, setCreateOpen] = useState(false);
   const [receiving, setReceiving] = useState<PurchaseOrder | null>(null);
-  const [filter, setFilter] = useState("all");
+
+  // Persistent filter state across navigation
+  const initialFilters = useMemo(() => {
+    try {
+      const raw = sessionStorage.getItem("pc_purchase_orders_filters") || localStorage.getItem("pc_purchase_orders_filters");
+      if (raw) return JSON.parse(raw);
+    } catch { /* ignore */ }
+    return {};
+  }, []);
+
+  const [filter, setFilter] = useState(initialFilters.filter || "all");
   const [selectedDetailPo, setSelectedDetailPo] = useState<PurchaseOrder | null>(null);
   const [localVersion, setLocalVersion] = useState(0);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialFilters.searchQuery || "");
+
+  useEffect(() => {
+    try {
+      const toSave = { filter, searchQuery };
+      const json = JSON.stringify(toSave);
+      sessionStorage.setItem("pc_purchase_orders_filters", json);
+      localStorage.setItem("pc_purchase_orders_filters", json);
+    } catch { /* ignore */ }
+  }, [filter, searchQuery]);
 
   const getPoPaymentInfo = useMemo(() => {
     return (po: PurchaseOrder) => {

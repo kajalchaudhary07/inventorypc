@@ -25,6 +25,13 @@ const fmt = (amount: number | undefined | null) => {
   return `₹${Number(amount).toLocaleString("en-IN")}`;
 };
 
+export function getProductTotalStock(product: AnyRecord): number {
+  if (product.variants && Array.isArray(product.variants) && product.variants.length > 0) {
+    return product.variants.reduce((acc: number, v: any) => acc + (Number(v.stock) || 0), 0);
+  }
+  return Number(product.stock) || 0;
+}
+
 // ─── Inline Editable Cell ────────────────────────────────────────────────────
 
 function InlineEditCell({
@@ -379,35 +386,65 @@ function ManualProductModal({
 
 // ─── Variant Rows ───────────────────────────────────────────────────────────
 
-function VariantRows({ productId, variants, showDelete }: { productId: string; variants: AnyRecord[]; showDelete?: boolean }) {
+function VariantRows({
+  productId,
+  variants,
+  parentCost,
+  parentPrice,
+  showDelete,
+}: {
+  productId: string;
+  variants: AnyRecord[];
+  parentCost?: number | null;
+  parentPrice?: number | null;
+  showDelete?: boolean;
+}) {
   if (!variants || variants.length === 0) return null;
   return (
     <>
-      {variants.map((v) => (
-        <tr key={v.id} className="bg-slate-50 border-t border-dashed border-slate-200">
-          <td className="pl-14 pr-6 py-2 text-xs text-slate-500">
-            ↳ {v.name || v.shadeName || v.variantName || (v.attribute && v.value ? `${v.attribute}: ${v.value}` : null) || Object.entries(v.attributes || {}).map(([k, val]) => `${k}: ${val}`).join(", ") || v.id}
-          </td>
-          <td className="px-6 py-2 text-xs text-slate-400">-</td>
-          <td className="px-6 py-2 text-xs text-slate-400">
-            <InlineEditCell productId={productId} variantId={v.id} field="costPrice" value={v.costPrice ?? v.cost ?? null} isAdmin />
-          </td>
-          <td className="px-6 py-2 text-xs font-medium">
-            <InlineEditCell productId={productId} variantId={v.id} field="price" value={v.price ?? v.sellingPrice ?? null} isAdmin />
-          </td>
-          <td className="px-6 py-2 text-xs text-slate-400">
-            <InlineEditCell productId={productId} variantId={v.id} field="gstRate" value={v.gstRate ?? 0} prefix="" suffix="%" isAdmin />
-          </td>
-          <td className="px-6 py-2 text-xs text-slate-400">-</td>
-          <td className="px-6 py-2 text-xs text-slate-500">
-            <InlineEditCell productId={productId} variantId={v.id} field="mrp" value={v.originalPrice ?? v.mrp ?? null} isAdmin />
-          </td>
-          <td className="px-6 py-2 text-center text-xs">
-            <InlineEditCell productId={productId} variantId={v.id} field="stock" value={v.stock ?? null} prefix="" isAdmin />
-          </td>
-          <td className="px-4 py-2" />
-        </tr>
-      ))}
+      {variants.map((v) => {
+        const vCost = v.costPrice ?? v.cost ?? (parentCost != null ? parentCost : null);
+        const vSp = v.price ?? v.sellingPrice ?? (parentPrice != null ? parentPrice : null);
+        let marginDisplay = <span className="text-slate-300">-</span>;
+        if (vCost != null && vSp != null && vSp > 0) {
+          const marginAmount = vSp - vCost;
+          const marginPercent = ((vSp - vCost) / vSp) * 100;
+          const isNegative = marginAmount < 0;
+          marginDisplay = (
+            <span className={isNegative ? "text-red-500 font-semibold" : "font-medium text-emerald-600"}>
+              ₹{marginAmount.toLocaleString("en-IN")} / {marginPercent.toFixed(1)}%
+            </span>
+          );
+        }
+
+        return (
+          <tr key={v.id} className="bg-slate-50 border-t border-dashed border-slate-200">
+            <td className="pl-14 pr-6 py-2 text-xs text-slate-500">
+              ↳ {v.name || v.shadeName || v.variantName || (v.attribute && v.value ? `${v.attribute}: ${v.value}` : null) || Object.entries(v.attributes || {}).map(([k, val]) => `${k}: ${val}`).join(", ") || v.id}
+            </td>
+            <td className="px-6 py-2 text-xs text-slate-400">-</td>
+            <td className="px-6 py-2 text-xs text-slate-400">
+              <InlineEditCell productId={productId} variantId={v.id} field="costPrice" value={v.costPrice ?? v.cost ?? null} isAdmin />
+            </td>
+            <td className="px-6 py-2 text-xs font-medium">
+              <InlineEditCell productId={productId} variantId={v.id} field="price" value={v.price ?? v.sellingPrice ?? null} isAdmin />
+            </td>
+            <td className="px-6 py-2 text-xs text-slate-400">
+              <InlineEditCell productId={productId} variantId={v.id} field="gstRate" value={v.gstRate ?? 0} prefix="" suffix="%" isAdmin />
+            </td>
+            <td className="px-6 py-2 text-xs">
+              {marginDisplay}
+            </td>
+            <td className="px-6 py-2 text-xs text-slate-500">
+              <InlineEditCell productId={productId} variantId={v.id} field="mrp" value={v.originalPrice ?? v.mrp ?? null} isAdmin />
+            </td>
+            <td className="px-6 py-2 text-center text-xs">
+              <InlineEditCell productId={productId} variantId={v.id} field="stock" value={v.stock ?? null} prefix="" isAdmin />
+            </td>
+            <td className="px-4 py-2" />
+          </tr>
+        );
+      })}
     </>
   );
 }
@@ -416,17 +453,37 @@ function VariantRows({ productId, variants, showDelete }: { productId: string; v
 
 export default function AppProductsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [search, setSearch] = useState("");
+
+  // Persistent filter state across navigation
+  const initialFilters = useMemo(() => {
+    try {
+      const raw = sessionStorage.getItem("pc_products_filters") || localStorage.getItem("pc_products_filters");
+      if (raw) return JSON.parse(raw);
+    } catch { /* ignore */ }
+    return {};
+  }, []);
+
+  const [search, setSearch] = useState<string>(initialFilters.search || "");
   const [showModal, setShowModal] = useState(false);
   const [showEditAppProductModal, setShowEditAppProductModal] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<"admin" | "manual">("admin");
+  const [activeTab, setActiveTab] = useState<"admin" | "manual">(initialFilters.activeTab || "admin");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingProduct, setEditingProduct] = useState<AnyRecord | null>(null);
   const [editingAppProduct, setEditingAppProduct] = useState<AnyRecord | null>(null);
-  const [catFilter, setCatFilter] = useState("all");
-  const [stockFilter, setStockFilter] = useState("all");
+  const [catFilter, setCatFilter] = useState<string>(initialFilters.catFilter || "all");
+  const [stockFilter, setStockFilter] = useState<string>(initialFilters.stockFilter || "all");
   const [selectedDetailProduct, setSelectedDetailProduct] = useState<AnyRecord | null>(null);
+
+  // Synchronize products filter state to storage
+  useEffect(() => {
+    try {
+      const toSave = { search, catFilter, stockFilter, activeTab };
+      const json = JSON.stringify(toSave);
+      sessionStorage.setItem("pc_products_filters", json);
+      localStorage.setItem("pc_products_filters", json);
+    } catch { /* ignore */ }
+  }, [search, catFilter, stockFilter, activeTab]);
 
   // Synchronize stockFilter state with URL search param
   useEffect(() => {
@@ -516,11 +573,11 @@ export default function AppProductsPage() {
       list = list.filter((p) => (p.category || p.categoryName) === catFilter);
     if (stockFilter === "out")
       // Out of stock = stock is exactly 0
-      list = list.filter((p) => p.status !== "archived" && (p.stock ?? 0) === 0);
+      list = list.filter((p) => p.status !== "archived" && getProductTotalStock(p) === 0);
     else if (stockFilter === "low")
       // Low stock = stock > 0 && stock <= trigger
       list = list.filter((p) => {
-        const stock = p.stock ?? 0;
+        const stock = getProductTotalStock(p);
         const trigger = p.reorderTriggerValue || p.reorderLevel || 5;
         return p.status !== "archived" && stock > 0 && stock <= trigger;
       });
@@ -641,7 +698,7 @@ export default function AppProductsPage() {
       {/* Stats */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         <Card><div className="p-4"><p className="text-sm text-gray-500">Showing</p><p className="text-3xl font-bold">{filtered.length}</p></div></Card>
-        <Card><div className="p-4"><p className="text-sm text-gray-500">Total Stock</p><p className="text-3xl font-bold">{filtered.reduce((s, p) => s + (Number(p.stock) || 0), 0)}</p></div></Card>
+        <Card><div className="p-4"><p className="text-sm text-gray-500">Total Stock</p><p className="text-3xl font-bold">{filtered.reduce((s, p) => s + getProductTotalStock(p), 0)}</p></div></Card>
       </div>
 
       {/* Table */}
@@ -678,6 +735,7 @@ export default function AppProductsPage() {
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((product) => {
                   const hasVariants = product.variants && product.variants.length > 0;
+                  const totalVariantStock = getProductTotalStock(product);
                   const isOpen = expanded.has(product.id);
                   return (
                     <>
@@ -702,8 +760,8 @@ export default function AppProductsPage() {
                               <p className="font-medium truncate max-w-[220px]">{product.name || "-"}</p>
                               {product.brand && <p className="text-xs text-slate-400">{product.brand}</p>}
                               {hasVariants && (
-                                <span className="text-[10px] text-blue-600 font-medium">
-                                  {product.variants.length} variant{product.variants.length > 1 ? "s" : ""}
+                                <span className="text-[10px] text-blue-600 font-medium bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 inline-block mt-0.5">
+                                  {product.variants.length} variant{product.variants.length > 1 ? "s" : ""} · Total Stock: {totalVariantStock}
                                 </span>
                               )}
                             </div>
@@ -741,26 +799,62 @@ export default function AppProductsPage() {
                           {(() => {
                             const cost = product.costPrice;
                             const sp = product.price ?? product.sellingPrice;
-                            if (cost == null || sp == null || sp === 0) return <span className="text-slate-300">-</span>;
-                            const marginAmount = sp - cost;
-                            const marginPercent = ((sp - cost) / sp) * 100;
-                            const isNegative = marginAmount < 0;
-                            return (
-                              <span className={isNegative ? "text-red-500 font-semibold" : "font-medium"}>
-                                ₹{marginAmount.toLocaleString("en-IN")} / {marginPercent.toFixed(1)}%
-                              </span>
-                            );
+                            if (cost != null && sp != null && sp !== 0) {
+                              const marginAmount = sp - cost;
+                              const marginPercent = ((sp - cost) / sp) * 100;
+                              const isNegative = marginAmount < 0;
+                              return (
+                                <span className={isNegative ? "text-red-500 font-semibold" : "font-medium"}>
+                                  ₹{marginAmount.toLocaleString("en-IN")} / {marginPercent.toFixed(1)}%
+                                </span>
+                              );
+                            }
+
+                            // If parent has no explicit cost/price but has variants, show avg variant margin
+                            if (hasVariants) {
+                              const validVariants = product.variants.filter((v: any) => {
+                                const c = v.costPrice ?? v.cost;
+                                const p = v.price ?? v.sellingPrice;
+                                return c != null && p != null && p > 0;
+                              });
+                              if (validVariants.length > 0) {
+                                const totalCost = validVariants.reduce((sum: number, v: any) => sum + Number(v.costPrice ?? v.cost), 0);
+                                const totalSp = validVariants.reduce((sum: number, v: any) => sum + Number(v.price ?? v.sellingPrice), 0);
+                                const avgMarginAmount = (totalSp - totalCost) / validVariants.length;
+                                const avgMarginPercent = ((totalSp - totalCost) / totalSp) * 100;
+                                const isNegative = avgMarginAmount < 0;
+                                return (
+                                  <div className="flex flex-col">
+                                    <span className={isNegative ? "text-red-500 font-semibold" : "font-medium"}>
+                                      ₹{Math.round(avgMarginAmount).toLocaleString("en-IN")} / {avgMarginPercent.toFixed(1)}%
+                                    </span>
+                                    <span className="text-[10px] text-slate-400">Avg across variants</span>
+                                  </div>
+                                );
+                              }
+                            }
+
+                            return <span className="text-slate-300">-</span>;
                           })()}
                         </td>
                         <td className="px-6 py-3 text-slate-500">{fmt(product.originalPrice ?? product.mrp)}</td>
                         <td className="px-6 py-3 text-center">
-                          <InlineEditCell
-                            productId={product.id}
-                            field="stock"
-                            value={product.stock ?? 0}
-                            prefix=""
-                            isAdmin={activeTab === "admin"}
-                          />
+                          {hasVariants ? (
+                            <div className="inline-flex flex-col items-center">
+                              <span className="font-semibold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded border border-blue-200 text-xs" title="Sum of all variants stock">
+                                {totalVariantStock}
+                              </span>
+                              <span className="text-[9px] text-slate-400 mt-0.5">Total Sum</span>
+                            </div>
+                          ) : (
+                            <InlineEditCell
+                              productId={product.id}
+                              field="stock"
+                              value={product.stock ?? 0}
+                              prefix=""
+                              isAdmin={activeTab === "admin"}
+                            />
+                          )}
                         </td>
                         {activeTab === "manual" && (
                           <td className="px-4 py-3">
@@ -801,7 +895,15 @@ export default function AppProductsPage() {
                           </td>
                         )}
                       </tr>
-                      {hasVariants && isOpen && <VariantRows productId={product.id} variants={product.variants} showDelete={activeTab === "manual"} />}
+                      {hasVariants && isOpen && (
+                        <VariantRows
+                          productId={product.id}
+                          variants={product.variants}
+                          parentCost={product.costPrice}
+                          parentPrice={product.price ?? product.sellingPrice}
+                          showDelete={activeTab === "manual"}
+                        />
+                      )}
                     </>
                   );
                 })}
@@ -864,6 +966,20 @@ function ProductDetailModal({
     const marginPercent = ((sp - cost) / sp) * 100;
     isNegative = marginAmount < 0;
     marginText = `₹${marginAmount.toLocaleString("en-IN")} / ${marginPercent.toFixed(1)}%`;
+  } else if (product.variants && product.variants.length > 0) {
+    const validVariants = product.variants.filter((v: any) => {
+      const c = v.costPrice ?? v.cost;
+      const p = v.price ?? v.sellingPrice;
+      return c != null && p != null && p > 0;
+    });
+    if (validVariants.length > 0) {
+      const totalCost = validVariants.reduce((sum: number, v: any) => sum + Number(v.costPrice ?? v.cost), 0);
+      const totalSp = validVariants.reduce((sum: number, v: any) => sum + Number(v.price ?? v.sellingPrice), 0);
+      const avgMarginAmount = (totalSp - totalCost) / validVariants.length;
+      const avgMarginPercent = ((totalSp - totalCost) / totalSp) * 100;
+      isNegative = avgMarginAmount < 0;
+      marginText = `₹${Math.round(avgMarginAmount).toLocaleString("en-IN")} / ${avgMarginPercent.toFixed(1)}% (Avg of variants)`;
+    }
   }
 
   const mrp = product.originalPrice ?? product.mrp;
@@ -917,7 +1033,16 @@ function ProductDetailModal({
           <div>
             <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Current Stock</div>
             <div className="mt-1 font-semibold text-slate-800 dark:text-slate-200">
-              {stock != null ? stock.toLocaleString("en-IN") : "-"}
+              {product.variants && product.variants.length > 0 ? (
+                <>
+                  <span>{getProductTotalStock(product).toLocaleString("en-IN")}</span>
+                  <span className="block text-[11px] text-blue-600 font-normal">
+                    (Sum of {product.variants.length} variants)
+                  </span>
+                </>
+              ) : (
+                stock != null ? stock.toLocaleString("en-IN") : "-"
+              )}
             </div>
           </div>
         </div>
@@ -935,6 +1060,53 @@ function ProductDetailModal({
             <div className="mt-1 font-semibold text-slate-800 dark:text-slate-200">{gst}</div>
           </div>
         </div>
+
+        {/* Variant Breakdown & Margins */}
+        {product.variants && product.variants.length > 0 && (
+          <div className="border-b pb-4 dark:border-slate-800">
+            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+              Variant Breakdown & Margins ({product.variants.length})
+            </div>
+            <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 dark:bg-slate-800 text-slate-500 text-left">
+                  <tr>
+                    <th className="p-2">Variant</th>
+                    <th className="p-2 text-right">Cost</th>
+                    <th className="p-2 text-right">SP</th>
+                    <th className="p-2 text-right">Margin</th>
+                    <th className="p-2 text-right">Stock</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {product.variants.map((v: any, i: number) => {
+                    const vCost = v.costPrice ?? v.cost ?? cost;
+                    const vSp = v.price ?? v.sellingPrice ?? sp;
+                    let vMargin = "-";
+                    let vIsNegative = false;
+                    if (vCost != null && vSp != null && vSp > 0) {
+                      const mAmt = vSp - vCost;
+                      const mPct = ((vSp - vCost) / vSp) * 100;
+                      vIsNegative = mAmt < 0;
+                      vMargin = `₹${mAmt.toLocaleString("en-IN")} (${mPct.toFixed(1)}%)`;
+                    }
+                    return (
+                      <tr key={v.id || i}>
+                        <td className="p-2 font-medium text-slate-700 dark:text-slate-200">
+                          {v.name || v.shadeName || v.variantName || (v.attribute && v.value ? `${v.attribute}: ${v.value}` : null) || Object.entries(v.attributes || {}).map(([k, val]) => `${k}: ${val}`).join(", ") || v.id}
+                        </td>
+                        <td className="p-2 text-right text-slate-500">{vCost != null ? `₹${Number(vCost).toLocaleString("en-IN")}` : "-"}</td>
+                        <td className="p-2 text-right font-medium text-slate-700 dark:text-slate-200">{vSp != null ? `₹${Number(vSp).toLocaleString("en-IN")}` : "-"}</td>
+                        <td className={`p-2 text-right font-semibold ${vIsNegative ? "text-red-500" : "text-emerald-600"}`}>{vMargin}</td>
+                        <td className="p-2 text-right text-slate-600 dark:text-slate-300">{v.stock != null ? v.stock : "-"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Sell Frequency (Calculated metrics) */}
         <div>

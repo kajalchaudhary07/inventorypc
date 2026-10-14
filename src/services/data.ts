@@ -353,6 +353,53 @@ export async function saveOrderPayment(orderId: string, amountPaid: number, paym
   logActivity("Payment updated", "salesOrder", logDetail, orderId);
 }
 
+// Save delivery date (expectedDelivery or deliveredAt) for a sales order to Firestore and local state
+export async function saveOrderDeliveryDate(
+  orderId: string,
+  deliveryData: { expectedDelivery?: number | null; deliveredAt?: number | null },
+  orderNo?: string
+) {
+  const now = Date.now();
+  const updateData: any = { updatedAt: now, ...deliveryData };
+
+  // Save to salesOrders collection
+  if (isFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, "salesOrders", orderId), updateData);
+    } catch {
+      await setDoc(doc(db, "salesOrders", orderId), updateData, { merge: true });
+    }
+    // Also try updating orders collection if app order
+    try {
+      await updateDoc(doc(db, "orders", orderId), updateData);
+    } catch { /* ignore */ }
+  }
+
+  // Update the local store so UI reflects immediately
+  const state = useDataStore.getState() as any;
+  const salesOrders = state.salesOrders || [];
+  const exists = salesOrders.some((o: any) => o.id === orderId);
+  const updatedSO = exists
+    ? salesOrders.map((o: any) => (o.id === orderId ? { ...o, ...updateData } : o))
+    : [{ id: orderId, ...updateData }, ...salesOrders];
+  state.setCollection("salesOrders", updatedSO);
+
+  // Also update adminOrders in local state
+  const adminOrders = state.adminOrders || [];
+  const updatedAO = adminOrders.map((o: any) =>
+    o.id === orderId ? { ...o, ...updateData } : o
+  );
+  state.setCollection("adminOrders", updatedAO);
+
+  const targetDateStr = deliveryData.expectedDelivery
+    ? `Expected: ${new Date(deliveryData.expectedDelivery).toLocaleDateString()}`
+    : deliveryData.deliveredAt
+    ? `Delivered: ${new Date(deliveryData.deliveredAt).toLocaleDateString()}`
+    : "Cleared";
+
+  logActivity("Delivery date updated", "salesOrder", `${orderNo || orderId} → ${targetDateStr}`, orderId);
+}
+
 // Save payment amount for a purchase order to Firestore
 export async function savePOPayment(poId: string, amountPaid: number) {
   if (isFirebaseConfigured && db) {

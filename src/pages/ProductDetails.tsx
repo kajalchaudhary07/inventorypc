@@ -102,7 +102,20 @@ export default function ProductDetails() {
           </Card>
           <Card className="p-4">
             <p className="text-xs text-slate-400 uppercase tracking-wide">Stock</p>
-            <p className="mt-1 text-lg font-bold text-slate-900 dark:text-white">{stock != null ? num(stock) : "—"}</p>
+            <p className="mt-1 text-lg font-bold text-slate-900 dark:text-white">
+              {variants.length > 0 ? (
+                <>
+                  {num(variants.reduce((acc, v) => acc + Number(v.stock || 0), 0))}
+                  <span className="ml-1.5 text-xs text-blue-600 font-normal">
+                    (Sum of {variants.length} variants)
+                  </span>
+                </>
+              ) : stock != null ? (
+                num(stock)
+              ) : (
+                "—"
+              )}
+            </p>
           </Card>
         </div>
 
@@ -120,26 +133,41 @@ export default function ProductDetails() {
                     <th className="pb-2 pr-4">SKU</th>
                     <th className="pb-2 pr-4 text-right">Cost</th>
                     <th className="pb-2 pr-4 text-right">Price</th>
+                    <th className="pb-2 pr-4 text-right">Margin</th>
                     <th className="pb-2 pr-4 text-right">MRP</th>
                     <th className="pb-2 text-right">Stock</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {variants.map((v: any, i: number) => (
-                    <tr key={v.id || i} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="py-2.5 pr-4">
-                        <p className="font-medium text-slate-900 dark:text-white">
-                          {v.name || v.variantName || v.size || v.label || `Variant ${i + 1}`}
-                        </p>
-                        {v.color && <p className="text-xs text-slate-400">{v.color}</p>}
-                      </td>
-                      <td className="py-2.5 pr-4 font-mono text-xs text-slate-400">{v.sku || v.variantSku || "—"}</td>
-                      <td className="py-2.5 pr-4 text-right tabular-nums">{v.costPrice ? inr(Number(v.costPrice)) : "—"}</td>
-                      <td className="py-2.5 pr-4 text-right tabular-nums font-medium">{v.price || v.sellingPrice ? inr(Number(v.price ?? v.sellingPrice)) : "—"}</td>
-                      <td className="py-2.5 pr-4 text-right tabular-nums text-slate-400">{v.originalPrice || v.mrp ? inr(Number(v.originalPrice ?? v.mrp)) : "—"}</td>
-                      <td className="py-2.5 text-right tabular-nums">{v.stock != null ? num(Number(v.stock)) : "—"}</td>
-                    </tr>
-                  ))}
+                  {variants.map((v: any, i: number) => {
+                    const vCost = v.costPrice ?? costPrice;
+                    const vPrice = v.price ?? v.sellingPrice ?? sellingPrice;
+                    let vMargin = "—";
+                    let isNeg = false;
+                    if (vCost != null && vPrice != null && Number(vPrice) > 0 && Number(vCost) > 0) {
+                      const mAmt = Number(vPrice) - Number(vCost);
+                      const mPct = (mAmt / Number(vPrice)) * 100;
+                      isNeg = mAmt < 0;
+                      vMargin = `${inr(mAmt)} (${mPct.toFixed(1)}%)`;
+                    }
+
+                    return (
+                      <tr key={v.id || i} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="py-2.5 pr-4">
+                          <p className="font-medium text-slate-900 dark:text-white">
+                            {v.name || v.variantName || v.size || v.label || `Variant ${i + 1}`}
+                          </p>
+                          {v.color && <p className="text-xs text-slate-400">{v.color}</p>}
+                        </td>
+                        <td className="py-2.5 pr-4 font-mono text-xs text-slate-400">{v.sku || v.variantSku || "—"}</td>
+                        <td className="py-2.5 pr-4 text-right tabular-nums">{v.costPrice ? inr(Number(v.costPrice)) : "—"}</td>
+                        <td className="py-2.5 pr-4 text-right tabular-nums font-medium">{v.price || v.sellingPrice ? inr(Number(v.price ?? v.sellingPrice)) : "—"}</td>
+                        <td className={`py-2.5 pr-4 text-right tabular-nums font-semibold ${isNeg ? "text-red-500" : "text-emerald-600"}`}>{vMargin}</td>
+                        <td className="py-2.5 pr-4 text-right tabular-nums text-slate-400">{v.originalPrice || v.mrp ? inr(Number(v.originalPrice ?? v.mrp)) : "—"}</td>
+                        <td className="py-2.5 text-right tabular-nums">{v.stock != null ? num(Number(v.stock)) : "—"}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

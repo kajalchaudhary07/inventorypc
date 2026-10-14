@@ -131,6 +131,7 @@ export const mergeOrders = (
       channel: o.channel || o.source || "app",
       paymentStatus: rawPaymentStatus,
       expectedDelivery: o.expectedDelivery,
+      deliveredAt: o.deliveredAt,
       ownerName,
       resolvedSalonName: finalSalonName,
       customerName: customerName || rawSalonName,
@@ -182,6 +183,8 @@ export const mergeOrders = (
         updatedAt: o.updatedAt ? toMs(o.updatedAt) : (existing.updatedAt ? toMs(existing.updatedAt) : (o.createdAt ? toMs(o.createdAt) : existing.createdAt)),
         status: rawStatus,
         paymentStatus: rawPaymentStatus,
+        expectedDelivery: o.expectedDelivery !== undefined ? o.expectedDelivery : existing.expectedDelivery,
+        deliveredAt: o.deliveredAt !== undefined ? o.deliveredAt : existing.deliveredAt,
       };
 
       if (!merged.id) merged.id = o.id;
